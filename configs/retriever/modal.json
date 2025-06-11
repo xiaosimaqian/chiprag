@@ -1,0 +1,32 @@
+
+{
+    "name": "modal_retriever",
+    "version": "1.0.0",
+    "description": "模态检索器配置",
+    
+    "modalities": [
+        {
+            "name": "text",
+            "type": "text",
+            "weight": 1.0,
+            "model": "bert-base-uncased"
+        },
+        {
+            "name": "image",
+            "type": "image",
+            "weight": 0.8,
+            "model": "resnet50"
+        },
+        {
+            "name": "graph",
+            "type": "graph",
+            "weight": 0.9,
+            "model": "graphsage"
+        }
+    ],
+    
+    "fusion": {
+        "method": "weighted_sum",
+        "normalize": true
+    }
+}
