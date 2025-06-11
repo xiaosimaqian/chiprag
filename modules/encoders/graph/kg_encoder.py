@@ -2,37 +2,46 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Union
 import logging
+import gc
 
 logger = logging.getLogger(__name__)
 
 class KGEncoder(nn.Module):
     """知识图谱编码器"""
     
-    def __init__(self, num_entities: int, num_relations: int, embedding_dim: int = 100, hidden_dim: int = 256, num_layers: int = 2, dropout: float = 0.1):
+    def __init__(self, config: Dict[str, Any]):
         """
         初始化知识图谱编码器
         
         Args:
-            num_entities: 实体数量
-            num_relations: 关系数量
-            embedding_dim: 嵌入维度
-            hidden_dim: 隐藏层维度
-            num_layers: 层数
-            dropout: Dropout比率
+            config: 配置字典，包含以下字段：
+                - num_entities: 实体数量
+                - num_relations: 关系数量
+                - embedding_dim: 嵌入维度
+                - hidden_dim: 隐藏层维度
+                - num_layers: 层数
+                - dropout: Dropout比率
+                - batch_size: 批处理大小
         """
         super().__init__()
-        self.num_entities = num_entities
-        self.num_relations = num_relations
-        self.embedding_dim = embedding_dim
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
+        self.num_entities = config['num_entities']
+        self.num_relations = config['num_relations']
+        self.embedding_dim = config.get('embedding_dim', 100)
+        self.hidden_dim = config.get('hidden_dim', 256)
+        self.num_layers = config.get('num_layers', 2)
+        self.dropout = config.get('dropout', 0.1)
+        self.batch_size = config.get('batch_size', 32)
+        
+        # 检查CUDA是否可用
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        logger.info(f"使用设备: {self.device}")
         
         # 实体嵌入
-        self.entity_embeddings = nn.Embedding(num_entities, embedding_dim)
+        self.entity_embeddings = nn.Embedding(self.num_entities, self.embedding_dim)
         # 关系嵌入
-        self.relation_embeddings = nn.Embedding(num_relations, embedding_dim)
+        self.relation_embeddings = nn.Embedding(self.num_relations, self.embedding_dim)
         
         # 初始化嵌入
         nn.init.xavier_uniform_(self.entity_embeddings.weight)
@@ -40,11 +49,88 @@ class KGEncoder(nn.Module):
         
         # 添加多层感知机
         self.mlp = nn.Sequential(
-            nn.Linear(embedding_dim, hidden_dim),
+            nn.Linear(self.embedding_dim, self.hidden_dim),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, embedding_dim)
+            nn.Dropout(self.dropout),
+            nn.Linear(self.hidden_dim, self.embedding_dim)
         )
+        
+        # 将模型移到指定设备
+        self.to(self.device)
+        
+    def _validate_triples(self, triples: torch.Tensor) -> None:
+        """验证三元组
+        
+        Args:
+            triples: 三元组张量
+            
+        Raises:
+            ValueError: 三元组无效
+        """
+        if not isinstance(triples, torch.Tensor):
+            raise ValueError("三元组必须是torch.Tensor")
+        if triples.dim() != 2 or triples.size(1) != 3:
+            raise ValueError("三元组必须是[batch_size, 3]形状的张量")
+        if triples.numel() == 0:
+            raise ValueError("三元组不能为空")
+        if torch.isnan(triples).any():
+            raise ValueError("三元组包含NaN值")
+            
+    def _validate_entity_id(self, entity_id: int) -> None:
+        """验证实体ID
+        
+        Args:
+            entity_id: 实体ID
+            
+        Raises:
+            ValueError: 实体ID无效
+        """
+        if not isinstance(entity_id, int):
+            raise ValueError("实体ID必须是整数")
+        if entity_id < 0 or entity_id >= self.num_entities:
+            raise ValueError(f"实体ID必须在[0, {self.num_entities-1}]范围内")
+            
+    def _validate_relation_id(self, relation_id: int) -> None:
+        """验证关系ID
+        
+        Args:
+            relation_id: 关系ID
+            
+        Raises:
+            ValueError: 关系ID无效
+        """
+        if not isinstance(relation_id, int):
+            raise ValueError("关系ID必须是整数")
+        if relation_id < 0 or relation_id >= self.num_relations:
+            raise ValueError(f"关系ID必须在[0, {self.num_relations-1}]范围内")
+            
+    def _process_batch(self, triples: torch.Tensor, start_idx: int) -> torch.Tensor:
+        """处理一批三元组
+        
+        Args:
+            triples: 三元组张量
+            start_idx: 起始索引
+            
+        Returns:
+            三元组得分
+        """
+        end_idx = min(start_idx + self.batch_size, len(triples))
+        batch_triples = triples[start_idx:end_idx].to(self.device)
+        
+        # 获取实体和关系的嵌入
+        head_emb = self.entity_embeddings(batch_triples[:, 0])
+        relation_emb = self.relation_embeddings(batch_triples[:, 1])
+        tail_emb = self.entity_embeddings(batch_triples[:, 2])
+        
+        # 计算三元组得分
+        score = self._compute_score(head_emb, relation_emb, tail_emb)
+        
+        # 清理内存
+        del head_emb, relation_emb, tail_emb, batch_triples
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
+        return score
         
     def forward(self, triples: torch.Tensor) -> torch.Tensor:
         """
@@ -56,15 +142,16 @@ class KGEncoder(nn.Module):
         Returns:
             三元组得分
         """
-        # 获取实体和关系的嵌入
-        head_emb = self.entity_embeddings(triples[:, 0])
-        relation_emb = self.relation_embeddings(triples[:, 1])
-        tail_emb = self.entity_embeddings(triples[:, 2])
+        self._validate_triples(triples)
         
-        # 计算三元组得分
-        score = self._compute_score(head_emb, relation_emb, tail_emb)
-        
-        return score
+        # 分批处理
+        all_scores = []
+        for i in range(0, len(triples), self.batch_size):
+            batch_scores = self._process_batch(triples, i)
+            all_scores.append(batch_scores)
+            
+        # 合并所有批次的得分
+        return torch.cat(all_scores, dim=0)
         
     def _compute_score(self, head_emb: torch.Tensor, relation_emb: torch.Tensor, tail_emb: torch.Tensor) -> torch.Tensor:
         """
@@ -92,7 +179,8 @@ class KGEncoder(nn.Module):
         Returns:
             实体嵌入向量
         """
-        return self.entity_embeddings(torch.tensor(entity_id))
+        self._validate_entity_id(entity_id)
+        return self.entity_embeddings(torch.tensor(entity_id, device=self.device))
         
     def get_relation_embedding(self, relation_id: int) -> torch.Tensor:
         """
@@ -104,7 +192,8 @@ class KGEncoder(nn.Module):
         Returns:
             关系嵌入向量
         """
-        return self.relation_embeddings(torch.tensor(relation_id))
+        self._validate_relation_id(relation_id)
+        return self.relation_embeddings(torch.tensor(relation_id, device=self.device))
         
     def compute_entity_similarity(self, entity1_id: int, entity2_id: int) -> float:
         """
@@ -121,6 +210,12 @@ class KGEncoder(nn.Module):
         emb2 = self.get_entity_embedding(entity2_id)
         
         similarity = F.cosine_similarity(emb1, emb2, dim=0)
+        
+        # 清理内存
+        del emb1, emb2
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
         return similarity.item()
         
     def compute_relation_similarity(self, relation1_id: int, relation2_id: int) -> float:
@@ -138,6 +233,12 @@ class KGEncoder(nn.Module):
         emb2 = self.get_relation_embedding(relation2_id)
         
         similarity = F.cosine_similarity(emb1, emb2, dim=0)
+        
+        # 清理内存
+        del emb1, emb2
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
         return similarity.item()
         
     def predict_tail(self, head_id: int, relation_id: int, k: int = 5) -> List[Tuple[int, float]]:
@@ -152,18 +253,38 @@ class KGEncoder(nn.Module):
         Returns:
             候选尾实体列表及其得分
         """
+        self._validate_entity_id(head_id)
+        self._validate_relation_id(relation_id)
+        
         head_emb = self.get_entity_embedding(head_id)
         relation_emb = self.get_relation_embedding(relation_id)
         
-        # 计算所有可能的尾实体得分
-        all_tails = torch.arange(self.num_entities)
-        tail_embs = self.entity_embeddings(all_tails)
-        
-        scores = torch.norm(head_emb + relation_emb - tail_embs, p=2, dim=1)
+        # 分批计算所有可能的尾实体得分
+        all_scores = []
+        for i in range(0, self.num_entities, self.batch_size):
+            end_idx = min(i + self.batch_size, self.num_entities)
+            batch_tails = torch.arange(i, end_idx, device=self.device)
+            tail_embs = self.entity_embeddings(batch_tails)
+            
+            batch_scores = torch.norm(head_emb + relation_emb - tail_embs, p=2, dim=1)
+            all_scores.append(batch_scores)
+            
+            # 清理内存
+            del tail_embs, batch_scores
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
+        # 合并所有批次的得分
+        scores = torch.cat(all_scores, dim=0)
         
         # 获取得分最高的k个尾实体
         topk_scores, topk_indices = torch.topk(scores, k)
         
+        # 清理内存
+        del head_emb, relation_emb, scores, all_scores
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
         return [(idx.item(), score.item()) for idx, score in zip(topk_indices, topk_scores)]
         
     def save_model(self, path: str):
@@ -175,9 +296,15 @@ class KGEncoder(nn.Module):
         """
         torch.save({
             'model_state_dict': self.state_dict(),
-            'num_entities': self.num_entities,
-            'num_relations': self.num_relations,
-            'embedding_dim': self.embedding_dim
+            'config': {
+                'num_entities': self.num_entities,
+                'num_relations': self.num_relations,
+                'embedding_dim': self.embedding_dim,
+                'hidden_dim': self.hidden_dim,
+                'num_layers': self.num_layers,
+                'dropout': self.dropout,
+                'batch_size': self.batch_size
+            }
         }, path)
         logger.info(f"模型已保存到: {path}")
         
@@ -193,11 +320,7 @@ class KGEncoder(nn.Module):
             加载的模型实例
         """
         checkpoint = torch.load(path)
-        model = cls(
-            num_entities=checkpoint['num_entities'],
-            num_relations=checkpoint['num_relations'],
-            embedding_dim=checkpoint['embedding_dim']
-        )
+        model = cls(checkpoint['config'])
         model.load_state_dict(checkpoint['model_state_dict'])
         logger.info(f"模型已从 {path} 加载")
         return model 

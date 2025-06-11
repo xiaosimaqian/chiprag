@@ -4,13 +4,16 @@ import torchvision.models as models
 import torchvision.transforms as transforms
 from PIL import Image
 import logging
+from typing import Dict, Any, List, Union
+import gc
+import os
 
 logger = logging.getLogger(__name__)
 
 class ResNetImageEncoder(nn.Module):
     """基于ResNet的图像编码器"""
     
-    def __init__(self, config=None):
+    def __init__(self, config: Dict[str, Any] = None):
         """初始化ResNet编码器
         
         Args:
@@ -21,6 +24,7 @@ class ResNetImageEncoder(nn.Module):
         self.model_name = self.config.get('model_name', 'resnet50')
         self.pretrained = self.config.get('pretrained', True)
         self.feature_dim = self.config.get('feature_dim', 2048)
+        self.batch_size = self.config.get('batch_size', 32)
         
         # 检查CUDA是否可用
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -52,43 +56,135 @@ class ResNetImageEncoder(nn.Module):
             return models.resnet18(pretrained=self.pretrained)
         else:
             raise ValueError(f"不支持的ResNet模型: {self.model_name}")
+            
+    def _validate_image(self, image: Union[str, Image.Image]) -> Image.Image:
+        """验证输入图像
         
-    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        Args:
+            image: 输入图像或图像路径
+            
+        Returns:
+            验证后的PIL图像
+            
+        Raises:
+            ValueError: 图像无效
+        """
+        if isinstance(image, str):
+            if not os.path.exists(image):
+                raise ValueError(f"图像文件不存在: {image}")
+            try:
+                image = Image.open(image)
+            except Exception as e:
+                raise ValueError(f"无法打开图像文件: {str(e)}")
+                
+        if not isinstance(image, Image.Image):
+            raise ValueError("输入必须是PIL图像或图像文件路径")
+            
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+            
+        return image
+        
+    def _validate_images(self, images: List[Union[str, Image.Image]]) -> List[Image.Image]:
+        """验证输入图像列表
+        
+        Args:
+            images: 输入图像列表
+            
+        Returns:
+            验证后的PIL图像列表
+            
+        Raises:
+            ValueError: 图像列表无效
+        """
+        if not isinstance(images, list):
+            raise ValueError("输入必须是列表")
+        if not images:
+            raise ValueError("输入列表不能为空")
+            
+        return [self._validate_image(image) for image in images]
+        
+    def _process_batch(self, images: List[Image.Image], start_idx: int) -> torch.Tensor:
+        """处理一批图像
+        
+        Args:
+            images: 图像列表
+            start_idx: 起始索引
+            
+        Returns:
+            图像编码向量
+        """
+        end_idx = min(start_idx + self.batch_size, len(images))
+        batch_images = images[start_idx:end_idx]
+        
+        # 预处理图像
+        image_tensors = torch.stack([
+            self.transform(image) for image in batch_images
+        ])
+        
+        # 将输入移到模型所在设备
+        image_tensors = image_tensors.to(self.device)
+        
+        # 获取模型输出
+        with torch.no_grad():
+            features = self.model(image_tensors)
+            # 移除batch维度
+            features = features.squeeze()
+            
+        # 清理内存
+        del image_tensors
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
+        return features
+        
+    def forward(self, images: List[Image.Image]) -> torch.Tensor:
         """
         前向传播
         
         Args:
-            images: 输入图像张量 [batch_size, channels, height, width]
+            images: 输入图像列表
             
         Returns:
             图像编码向量
         """
-        with torch.no_grad():
-            features = self.model(images)
-            # 移除batch维度
-            features = features.squeeze()
-            
-        return features
+        images = self._validate_images(images)
         
-    def encode_image(self, image: Image.Image) -> torch.Tensor:
+        # 分批处理
+        all_features = []
+        for i in range(0, len(images), self.batch_size):
+            batch_features = self._process_batch(images, i)
+            all_features.append(batch_features)
+            
+        # 合并所有批次的编码
+        return torch.cat(all_features, dim=0)
+        
+    def encode_image(self, image: Union[str, Image.Image]) -> torch.Tensor:
         """
         编码单个图像
         
         Args:
-            image: PIL图像
+            image: PIL图像或文件路径
             
         Returns:
             图像编码向量
         """
-        # 预处理图像
-        image_tensor = self.transform(image).unsqueeze(0)
+        image = self._validate_image(image)
+        return self.forward([image])[0]
         
-        # 将输入移到模型所在设备
-        image_tensor = image_tensor.to(self.device)
+    def encode(self, image: Union[str, Image.Image]) -> torch.Tensor:
+        """
+        encode_image的别名方法
         
-        return self.forward(image_tensor)
+        Args:
+            image: PIL图像或文件路径
+            
+        Returns:
+            图像编码向量
+        """
+        return self.encode_image(image)
         
-    def encode_images(self, images: list) -> torch.Tensor:
+    def encode_images(self, images: List[Union[str, Image.Image]]) -> torch.Tensor:
         """
         批量编码图像
         
@@ -98,17 +194,9 @@ class ResNetImageEncoder(nn.Module):
         Returns:
             图像编码向量矩阵
         """
-        # 预处理图像
-        image_tensors = torch.stack([
-            self.transform(image) for image in images
-        ])
+        return self.forward(images)
         
-        # 将输入移到模型所在设备
-        image_tensors = image_tensors.to(self.device)
-        
-        return self.forward(image_tensors)
-        
-    def compute_similarity(self, image1: Image.Image, image2: Image.Image) -> float:
+    def compute_similarity(self, image1: Union[str, Image.Image], image2: Union[str, Image.Image]) -> float:
         """
         计算两个图像的相似度
         
@@ -126,6 +214,11 @@ class ResNetImageEncoder(nn.Module):
         # 计算余弦相似度
         similarity = torch.nn.functional.cosine_similarity(emb1, emb2, dim=0)
         
+        # 清理内存
+        del emb1, emb2
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
         return similarity.item()
         
     def save_model(self, path: str):
@@ -137,7 +230,8 @@ class ResNetImageEncoder(nn.Module):
         """
         torch.save({
             'model_state_dict': self.model.state_dict(),
-            'transform': self.transform
+            'transform': self.transform,
+            'config': self.config
         }, path)
         logger.info(f"模型已保存到: {path}")
         
@@ -153,7 +247,7 @@ class ResNetImageEncoder(nn.Module):
             加载的模型实例
         """
         checkpoint = torch.load(path)
-        model = cls()
+        model = cls(checkpoint['config'])
         model.model.load_state_dict(checkpoint['model_state_dict'])
         model.transform = checkpoint['transform']
         logger.info(f"模型已从 {path} 加载")

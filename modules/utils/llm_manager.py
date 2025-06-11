@@ -251,23 +251,54 @@ class LLMManager:
         return prompt
         
     def _build_explanation_prompt(self, decision: Dict) -> str:
-        """构建解释提示
+        """构建解释提示"""
+        return f"请解释以下决策的原因：\n{json.dumps(decision, ensure_ascii=False, indent=2)}"
+        
+    def _build_feature_extraction_prompt(self, query: str, context: Optional[Dict] = None) -> str:
+        """构建特征提取提示
         
         Args:
-            decision: 决策信息
+            query: 查询文本
+            context: 上下文信息
             
         Returns:
-            str: 解释提示
+            str: 提示文本
         """
-        prompt = f"""解释以下布局决策：
-
-决策类型：{decision.get('type', '')}
-决策内容：{decision.get('content', '')}
-决策原因：{decision.get('reason', '')}
-
-请提供详细的解释。
-"""
+        prompt = f"请从以下查询中提取关键特征：\n{query}\n"
+        
+        if context:
+            prompt += f"\n上下文信息：\n{json.dumps(context, ensure_ascii=False, indent=2)}"
+            
+        prompt += "\n请以JSON格式返回提取的特征，包含以下字段：\n"
+        prompt += "- keywords: 关键词列表\n"
+        prompt += "- intent: 查询意图\n"
+        prompt += "- constraints: 约束条件\n"
+        prompt += "- context_info: 上下文相关信息"
+        
         return prompt
+        
+    def _parse_feature_response(self, response: str) -> Dict:
+        """解析特征提取响应
+        
+        Args:
+            response: LLM响应文本
+            
+        Returns:
+            Dict: 解析后的特征字典
+        """
+        try:
+            # 尝试直接解析JSON
+            features = json.loads(response)
+        except json.JSONDecodeError:
+            # 如果解析失败，返回默认值
+            features = {
+                'keywords': [],
+                'intent': '',
+                'constraints': [],
+                'context_info': {}
+            }
+            
+        return features
         
     def _generate_response(self, prompt: str) -> str:
         """生成回复
@@ -543,4 +574,10 @@ class LLMManager:
             合并后的结果
         """
         # TODO: 实现结果合并
-        return {} 
+        return {}
+
+    def compute_similarities(self, queries, candidates):
+        """
+        Mock方法：返回全0相似度列表
+        """
+        return [0.0 for _ in candidates] 

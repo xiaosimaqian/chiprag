@@ -38,6 +38,7 @@ class KnowledgeBase:
             'connection': [],
             'constraint': []
         }
+        self.layout_experience_path = self.config.get('layout_experience_path', './layout_experience')
         self._init_components()
         
     def _validate_config(self):
@@ -902,6 +903,10 @@ class KnowledgeBase:
 
     def update(self, new_knowledge):
         """更新知识库数据"""
+        # 确保每个知识条目都含有'name'字段
+        for item in new_knowledge:
+            if 'name' not in item:
+                item['name'] = item.get('id', 'unknown')
         self.data.update(new_knowledge)
         self.cases.extend(new_knowledge.get('cases', []))
         return self

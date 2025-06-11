@@ -5,6 +5,8 @@ from typing import Dict, Any
 import logging
 from modules.core.modal_retriever import ModalRetriever
 from modules.knowledge.knowledge_base import KnowledgeBase
+from unittest.mock import patch
+from PIL import Image
 
 class TestMultimodalRetrieval(unittest.TestCase):
     @classmethod
@@ -70,8 +72,12 @@ class TestMultimodalRetrieval(unittest.TestCase):
         cls.retriever = ModalRetriever(cls.config)
         cls.knowledge_base = KnowledgeBase(cls.config['knowledge_base'])
 
-    def test_modal_retrieval(self):
-        """测试多模态检索"""
+    def setUp(self):
+        pass
+
+    @patch('PIL.Image.open')
+    def test_modal_retrieval(self, mock_image_open):
+        mock_image_open.return_value = Image.new('RGB', (224, 224))
         query = {
             'text': 'Design a high-performance ALU',
             'image': 'path/to/layout.png',

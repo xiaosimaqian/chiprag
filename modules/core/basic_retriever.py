@@ -15,26 +15,30 @@ class BasicRetriever(BaseRetriever):
         super().__init__(config)
         self.llm_manager = LLMManager(config.get('llm', {}))
         
-    def retrieve(self, query: str, context: Optional[Dict] = None) -> List[Dict]:
+    def retrieve(self, query: str, context: Optional[Dict] = None, knowledge_base: Optional[Any] = None) -> List[Dict]:
         """执行检索
         
         Args:
             query: 查询文本
             context: 上下文信息
+            knowledge_base: 知识库实例
             
         Returns:
-            List[Dict]: 检索结果
+            List[Dict]: 检索结果列表
         """
         # 1. 特征提取
         features = self._extract_features(query, context)
         
         # 2. 相似度计算
-        results = self._compute_similarities(features)
+        if knowledge_base is not None:
+            results = self._compute_similarities_with_kb(features, knowledge_base)
+        else:
+            results = self._compute_similarities(features)
         
-        # 3. 结果解释
+        # 3. 生成解释
         results = self._generate_explanations(query, results)
         
-        return self.postprocess(results)
+        return results
         
     def compute_similarity(self, query: str, item: str) -> float:
         """计算文本相似度
@@ -71,6 +75,31 @@ class BasicRetriever(BaseRetriever):
             List[Dict]: 相似度结果
         """
         return self.llm_manager.compute_similarities(features)
+        
+    def _compute_similarities_with_kb(self, features: Dict, knowledge_base: Any) -> List[Dict]:
+        """使用知识库计算相似度
+        
+        Args:
+            features: 特征字典
+            knowledge_base: 知识库实例
+            
+        Returns:
+            List[Dict]: 相似度结果
+        """
+        # 从知识库中检索相似案例
+        similar_cases = knowledge_base.get_similar_cases(features)
+        
+        # 转换为标准格式
+        results = []
+        for case in similar_cases:
+            results.append({
+                'id': case.get('id', ''),
+                'content': case.get('content', ''),
+                'similarity': case.get('similarity', 0.0),
+                'metadata': case.get('metadata', {})
+            })
+            
+        return results
         
     def _generate_explanations(self, query: str, results: List[Dict]) -> List[Dict]:
         """生成解释

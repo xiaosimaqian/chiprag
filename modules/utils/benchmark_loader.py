@@ -11,13 +11,16 @@ from ..parsers.verilog_parser import VerilogParser
 logger = logging.getLogger(__name__)
 
 class BenchmarkLoader:
-    def __init__(self, benchmark_dir: str):
+    def __init__(self, benchmark_path: str):
         """初始化基准测试加载器
         
         Args:
-            benchmark_dir: 基准测试目录
+            benchmark_path: 基准测试数据目录路径
         """
-        self.benchmark_dir = benchmark_dir
+        if not os.path.exists(benchmark_path):
+            raise ValueError(f"基准测试数据目录不存在: {benchmark_path}")
+            
+        self.benchmark_dir = benchmark_path
         self.cache_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'cache')
         os.makedirs(self.cache_dir, exist_ok=True)
         
@@ -29,6 +32,10 @@ class BenchmarkLoader:
             
         Returns:
             设计信息字典
+            
+        Raises:
+            ValueError: 当设计目录不存在时
+            FileNotFoundError: 当必需的文件不存在时
         """
         logger.info(f"开始加载设计: {design_name}")
         
@@ -37,47 +44,64 @@ class BenchmarkLoader:
         if os.path.exists(cache_file):
             logger.info(f"发现缓存文件，正在加载: {cache_file}")
             start_time = time.time()
-            with open(cache_file, 'r') as f:
-                design_info = json.load(f)
-            logger.info(f"从缓存加载完成，耗时: {time.time() - start_time:.2f}秒")
-            return design_info
-            
-        # 加载各种文件
+            try:
+                with open(cache_file, 'r') as f:
+                    design_info = json.load(f)
+                logger.info(f"从缓存加载完成，耗时: {time.time() - start_time:.2f}秒")
+                return design_info
+            except Exception as e:
+                logger.warning(f"缓存文件加载失败: {e}")
+        
+        # 检查设计目录
         design_dir = os.path.join(self.benchmark_dir, design_name)
-        
-        # 加载Verilog网表
-        verilog_info = self._load_verilog(os.path.join(design_dir, 'design.v'))
-        
-        # 加载DEF文件
-        def_info = self._load_def(os.path.join(design_dir, 'floorplan.def'))
-        
-        # 加载LEF文件
-        cells_lef_info = self._load_lef(os.path.join(design_dir, 'cells.lef'))
-        tech_lef_info = self._load_lef(os.path.join(design_dir, 'tech.lef'))
-        
-        # 加载约束文件
-        constraints_info = self._load_constraints(os.path.join(design_dir, 'placement.constraints'))
-        
-        # 合并设计信息
-        design_info = {
-            'name': design_name,
-            'netlist': verilog_info,
-            'def': def_info,
-            'lef': {
-                'cells': cells_lef_info,
-                'technology': tech_lef_info
-            },
-            'constraints': constraints_info
+        if not os.path.exists(design_dir):
+            raise ValueError(f"设计目录不存在: {design_dir}")
+            
+        # 检查必需的文件
+        required_files = {
+            'verilog': os.path.join(design_dir, 'design.v'),
+            'def': os.path.join(design_dir, 'floorplan.def'),
+            'cells_lef': os.path.join(design_dir, 'cells.lef'),
+            'tech_lef': os.path.join(design_dir, 'tech.lef'),
+            'constraints': os.path.join(design_dir, 'placement.constraints')
         }
         
-        # 保存缓存
-        logger.info(f"正在保存中间结果到: {cache_file}")
-        start_time = time.time()
-        with open(cache_file, 'w') as f:
-            json.dump(design_info, f, indent=2)
-        logger.info(f"中间结果保存完成，耗时: {time.time() - start_time:.2f}秒")
+        for file_type, file_path in required_files.items():
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"必需的文件不存在: {file_path}")
         
-        return design_info
+        try:
+            # 加载各种文件
+            verilog_info = self._load_verilog(required_files['verilog'])
+            def_info = self._load_def(required_files['def'])
+            cells_lef_info = self._load_lef(required_files['cells_lef'])
+            tech_lef_info = self._load_lef(required_files['tech_lef'])
+            constraints_info = self._load_constraints(required_files['constraints'])
+            
+            # 合并设计信息
+            design_info = {
+                'name': design_name,
+                'netlist': verilog_info,
+                'def': def_info,
+                'lef': {
+                    'cells': cells_lef_info,
+                    'technology': tech_lef_info
+                },
+                'constraints': constraints_info
+            }
+            
+            # 保存缓存
+            logger.info(f"正在保存中间结果到: {cache_file}")
+            start_time = time.time()
+            with open(cache_file, 'w') as f:
+                json.dump(design_info, f, indent=2)
+            logger.info(f"中间结果保存完成，耗时: {time.time() - start_time:.2f}秒")
+            
+            return design_info
+            
+        except Exception as e:
+            logger.error(f"加载设计失败: {e}")
+            raise
         
     def _load_verilog(self, verilog_file: str) -> Dict:
         """加载Verilog网表文件
@@ -545,4 +569,22 @@ class BenchmarkLoader:
                 'max_power': int(match.group(2))
             })
             
-        return constraints 
+        return constraints
+
+    def load_benchmark(self, case: str) -> Dict:
+        """加载基准测试用例
+        
+        Args:
+            case: 基准测试用例名称
+            
+        Returns:
+            基准测试用例信息字典
+            
+        Raises:
+            ValueError: 当基准测试用例不存在时
+        """
+        try:
+            return self.load_design(case)
+        except Exception as e:
+            logger.error(f"加载基准测试用例失败: {e}")
+            raise ValueError(f"基准测试用例不存在或加载失败: {case}") 

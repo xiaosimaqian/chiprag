@@ -135,6 +135,10 @@ class ModalRetriever(BaseRetriever):
         """初始化组件"""
         self.encoders = {
             'text': TextEncoder(config=self.config.get('text_encoder', {})),
-            'image': ImageEncoder(**self.config.get('image_encoder', {})),
-            'graph': KGEncoder(num_entities=2, num_relations=10, **self.config.get('graph_encoder', {}))
+            'image': ImageEncoder(config=self.config.get('image_encoder', {})),
+            'graph': KGEncoder(
+                num_entities=2, 
+                num_relations=10, 
+                **self.config.get('graph_encoder', {})
+            )
         }

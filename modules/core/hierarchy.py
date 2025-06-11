@@ -7,7 +7,7 @@ import os
 from collections import defaultdict
 from typing import Dict, List, Union, Any, Optional
 import gc
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from ..utils.llm_manager import LLMManager
 
 logger = logging.getLogger(__name__)
@@ -17,9 +17,9 @@ class Node:
     """层次结构节点"""
     name: str
     type: str
-    children: List['Node']
-    attributes: Dict[str, Any]
-    features: Dict[str, Any] = None
+    children: List['Node'] = field(default_factory=list)
+    attributes: Dict[str, Any] = field(default_factory=dict)
+    features: Dict[str, Any] = field(default_factory=dict)
     parent: Optional['Node'] = None
     
     def __post_init__(self):

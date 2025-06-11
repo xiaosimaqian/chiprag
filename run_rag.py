@@ -39,7 +39,7 @@ class RAGController:
         from modules.utils.llm_manager import LLMManager
         from modules.utils.embedding_manager import EmbeddingManager
         from modules.evaluation.multi_objective_evaluator import MultiObjectiveEvaluator
-        from modules.layout.layout_generator import LayoutGenerator
+        from modules.core.rag_model import LayoutGenerator
         
         self.knowledge_base = KnowledgeBase(self.config.get('knowledge_base', {}))
         self.llm_manager = LLMManager(self.config.get('llm_config', {}))

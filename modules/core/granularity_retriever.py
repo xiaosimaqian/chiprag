@@ -9,6 +9,7 @@ from ..knowledge.transfer import KnowledgeTransfer
 from ..knowledge.fusion import KnowledgeFusion
 import torch
 import logging
+import inspect
 
 logger = logging.getLogger(__name__)
 
@@ -34,35 +35,30 @@ class GranularityRetriever(BaseRetriever):
             'cell': self._init_cell_retriever()
         }
         
-    def retrieve(self, query: Dict[str, Any], context: Optional[Dict] = None) -> List[Dict]:
+    def retrieve(self, query: Dict[str, Any], context: Optional[Dict] = None, knowledge_base: Optional[Any] = None) -> List[Dict]:
         """执行多粒度检索
         
         Args:
             query: 查询字典
             context: 上下文信息
+            knowledge_base: 知识库实例
             
         Returns:
-            List[Dict]: 检索结果
+            List[Dict]: 检索结果列表
         """
         results = []
         
         # 在各粒度执行检索
         for level, retriever in self.retrievers.items():
-            level_results = retriever.retrieve(query, context)
+            # 兼容下级 retriever 是否支持 knowledge_base
+            sig = inspect.signature(retriever.retrieve)
+            if 'knowledge_base' in sig.parameters:
+                level_results = retriever.retrieve(query, context, knowledge_base=knowledge_base)
+            else:
+                level_results = retriever.retrieve(query, context)
             
-            # 知识迁移
-            transferred_results = self.knowledge_transfer.transfer(
-                results=level_results,
-                target_level=level
-            )
-            
-            # 知识融合
-            fused_results = self.knowledge_fusion.fuse(
-                results=transferred_results,
-                level=level
-            )
-            
-            results.extend(fused_results)
+            if level_results:
+                results.extend(level_results)
             
         return results
         
