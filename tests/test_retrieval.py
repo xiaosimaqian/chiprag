@@ -140,7 +140,10 @@ class TestRetrieval(unittest.TestCase):
         # 验证结果
         self.assertIsNotNone(results)
         self.assertGreater(len(results), 0)
-        self.assertIn("module", str(results))
+        for result in results:
+            self.assertIn("hierarchy", result)
+            self.assertIn("levels", result["hierarchy"])
+            self.assertIn("module", result["hierarchy"]["levels"])
         
     def test_combined_retrieval(self):
         """测试组合检索"""
@@ -155,6 +158,11 @@ class TestRetrieval(unittest.TestCase):
                     "size": {"width": 100, "height": 100}
                 }
             ],
+            "hierarchy": {
+                "levels": ["top", "module"],
+                "modules": ["mem"],
+                "max_depth": 2
+            },
             "constraints": {
                 "power": {"max_power": 1.0},
                 "timing": {"max_delay": 1.0}
@@ -169,7 +177,11 @@ class TestRetrieval(unittest.TestCase):
         
         # 验证结果
         self.assertIsNotNone(layout_results)
-        self.assertIn("module", str(layout_results))
+        self.assertGreater(len(layout_results), 0)
+        for result in layout_results:
+            self.assertIn("hierarchy", result)
+            self.assertIn("levels", result["hierarchy"])
+            self.assertIn("module", result["hierarchy"]["levels"])
         
 if __name__ == '__main__':
     unittest.main()

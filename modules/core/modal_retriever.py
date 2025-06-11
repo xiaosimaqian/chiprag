@@ -24,7 +24,11 @@ class ModalRetriever(BaseRetriever):
         self.encoders = {
             'text': BertTextEncoder(config.get('text_encoder', {})),
             'image': ResNetImageEncoder(config.get('image_encoder', {})),
-            'graph': KGEncoder(num_entities=2, num_relations=10, **config.get('graph_encoder', {}))
+            'graph': KGEncoder({
+                'num_entities': 2,
+                'num_relations': 10,
+                **config.get('graph_encoder', {})
+            })
         }
         self._init_components()
         
@@ -102,8 +106,45 @@ class ModalRetriever(BaseRetriever):
         Returns:
             List[Dict]: 相似度结果
         """
-        # 实现相似度计算逻辑
-        pass
+        results = []
+        
+        # 获取知识库
+        knowledge_base = context.get('knowledge_base', []) if context else []
+        
+        for item in knowledge_base:
+            try:
+                # 编码知识项
+                item_encodings = {}
+                for modality, encoder in self.encoders.items():
+                    if modality in item and modality in query_encodings:
+                        item_encodings[modality] = encoder.encode(item[modality])
+                
+                # 计算各模态相似度
+                similarities = {}
+                for modality in query_encodings:
+                    if modality in item_encodings:
+                        similarities[modality] = torch.nn.functional.cosine_similarity(
+                            query_encodings[modality],
+                            item_encodings[modality]
+                        ).item()
+                
+                # 计算加权平均相似度
+                weighted_sim = sum(
+                    similarities.get(modality, 0) * self.weights[modality]
+                    for modality in self.weights
+                ) / sum(self.weights.values())
+                
+                results.append({
+                    'item': item,
+                    'similarity': weighted_sim,
+                    'modality_similarities': similarities
+                })
+                
+            except Exception as e:
+                logger.error(f"计算相似度失败: {str(e)}")
+                continue
+                
+        return results
         
     def _fuse_results(self, results: List[Dict]) -> List[Dict]:
         """融合多模态结果
@@ -114,8 +155,24 @@ class ModalRetriever(BaseRetriever):
         Returns:
             List[Dict]: 融合后的结果
         """
-        # 实现结果融合逻辑
-        pass
+        if not results:
+            return []
+            
+        # 按相似度排序
+        results.sort(key=lambda x: x['similarity'], reverse=True)
+        
+        # 去重
+        seen = set()
+        unique_results = []
+        for result in results:
+            item_id = result['item'].get('id', '')
+            if item_id not in seen:
+                seen.add(item_id)
+                unique_results.append(result)
+                
+        # 获取top-k结果
+        top_k = self.config.get('top_k', 5)
+        return unique_results[:top_k]
         
     def _weighted_fusion(self, similarities: Dict[str, float]) -> float:
         """加权融合相似度
@@ -136,9 +193,9 @@ class ModalRetriever(BaseRetriever):
         self.encoders = {
             'text': TextEncoder(config=self.config.get('text_encoder', {})),
             'image': ImageEncoder(config=self.config.get('image_encoder', {})),
-            'graph': KGEncoder(
-                num_entities=2, 
-                num_relations=10, 
+            'graph': KGEncoder(config={
+                'num_entities': 2,
+                'num_relations': 10,
                 **self.config.get('graph_encoder', {})
-            )
+            })
         }

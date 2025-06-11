@@ -7,7 +7,6 @@ from typing import Dict, List, Any
 from datetime import datetime
 from modules.utils.benchmark_loader import BenchmarkLoader
 from modules.core.rag_system import RAGSystem
-from .layout_generators import ORAssistant, GLayout, ORAssistantSim, GLayoutSim
 from chiprag.config.experiment_config import ExperimentConfig
 
 logger = logging.getLogger(__name__)
@@ -25,24 +24,6 @@ class ExperimentEvaluator:
             # 初始化基准测试加载器
             self.benchmark_loader = BenchmarkLoader(self.config.benchmark_path)
             
-            # 初始化布局生成器
-            self.layout_generators = {}
-            for name, config in self.config.layout_generators.items():
-                try:
-                    if name == 'ORAssistant':
-                        self.layout_generators[name] = ORAssistant(config['config'])
-                    elif name == 'GLayout':
-                        self.layout_generators[name] = GLayout(config['config'])
-                    elif name == 'ORAssistant-Sim':
-                        self.layout_generators[name] = ORAssistantSim(config['config'])
-                    elif name == 'GLayout-Sim':
-                        self.layout_generators[name] = GLayoutSim(config['config'])
-                    else:
-                        logger.warning(f"未知的布局生成器类型: {name}")
-                except Exception as e:
-                    logger.error(f"初始化布局生成器 {name} 失败: {e}")
-                    raise
-            
             # 初始化RAG系统
             self.rag_system = None  # 暂时不初始化，等待需要时再初始化
             
@@ -59,94 +40,47 @@ class ExperimentEvaluator:
         for param in required_params:
             if param not in self.config.experiment_params:
                 raise ValueError(f"缺少必需的实验参数: {param}")
+            if not isinstance(self.config.experiment_params[param], (int, float)):
+                raise ValueError(f"实验参数 {param} 必须是数值类型")
                 
-        if not isinstance(self.config.experiment_params['num_runs'], int) or \
-           self.config.experiment_params['num_runs'] <= 0:
-            raise ValueError("实验运行次数必须是正整数")
-            
-        if not isinstance(self.config.experiment_params['seed'], int):
-            raise ValueError("随机种子必须是整数")
-            
-    def run_all_experiments(self) -> Dict[str, Any]:
+    def run_all_experiments(self) -> Dict:
         """运行所有实验
         
         Returns:
-            实验结果字典
-            
-        Raises:
-            ValueError: 当实验参数无效时
-            RuntimeError: 当实验运行失败时
+            Dict: 实验结果
         """
         try:
             results = {
-                'layout_quality': {},
-                'constraint_satisfaction': {},
-                'optimization_efficiency': {}
+                'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
+                'config': self.config.to_dict(),
+                'benchmarks': {}
             }
             
-            # 对每个布局生成器运行实验
-            for method_name, generator in self.layout_generators.items():
-                logger.info(f"\n运行 {method_name} 实验...")
-                
-                # 初始化结果
-                results['layout_quality'][method_name] = {
-                    'density': [],
-                    'congestion': [],
-                    'timing_margin': []
-                }
-                results['constraint_satisfaction'][method_name] = {
-                    'mgc_fft_1': [],
-                    'mgc_des_perf_1': [],
-                    'mgc_pci_bridge32_a': []
-                }
-                results['optimization_efficiency'][method_name] = {
-                    'generation_time': [],
-                    'iterations': [],
-                    'total_time': []
-                }
-                
-                # 对每个基准测试运行多次实验
-                for benchmark in self.config.benchmarks:
-                    logger.info(f"\n处理基准测试: {benchmark}")
+            # 遍历所有基准测试
+            for benchmark_name in self.config.benchmarks:
+                try:
+                    logger.info(f"开始处理基准测试: {benchmark_name}")
                     
-                    try:
-                        # 加载基准测试数据
-                        design_info = self.benchmark_loader.load_benchmark(benchmark)
-                        
-                        for run in range(self.config.experiment_params['num_runs']):
-                            logger.info(f"运行 {run + 1}/{self.config.experiment_params['num_runs']}")
-                            
-                            try:
-                                # 生成布局
-                                start_time = time.time()
-                                layout = generator.generate_layout(design_info)
-                                generation_time = time.time() - start_time
-                                
-                                # 评估布局质量
-                                quality = self._evaluate_layout_quality(layout, design_info)
-                                results['layout_quality'][method_name]['density'].append(quality['density'])
-                                results['layout_quality'][method_name]['congestion'].append(quality['congestion'])
-                                results['layout_quality'][method_name]['timing_margin'].append(quality['timing_margin'])
-                                
-                                # 评估约束满足率
-                                satisfaction = self._evaluate_constraint_satisfaction(layout, design_info)
-                                results['constraint_satisfaction'][method_name][benchmark].append(satisfaction)
-                                
-                                # 评估优化效率
-                                results['optimization_efficiency'][method_name]['generation_time'].append(generation_time)
-                                results['optimization_efficiency'][method_name]['iterations'].append(generator.iterations)
-                                results['optimization_efficiency'][method_name]['total_time'].append(time.time() - start_time)
-                                
-                            except Exception as e:
-                                logger.error(f"运行 {run + 1} 失败: {e}")
-                                continue
-                                
-                    except Exception as e:
-                        logger.error(f"处理基准测试 {benchmark} 失败: {e}")
-                        continue
-            
-            # 计算平均值
-            self._calculate_averages(results)
+                    # 加载设计信息
+                    design_info = self.benchmark_loader.load_design(benchmark_name)
+                    
+                    # 初始化RAG系统
+                    if self.rag_system is None:
+                        self.rag_system = RAGSystem(self.config.rag_config)
+                    
+                    # 运行实验
+                    benchmark_results = self._run_benchmark_experiments(
+                        benchmark_name,
+                        design_info
+                    )
+                    
+                    results['benchmarks'][benchmark_name] = benchmark_results
+                    
+                except Exception as e:
+                    logger.error(f"处理基准测试 {benchmark_name} 失败: {e}")
+                    results['benchmarks'][benchmark_name] = {
+                        'error': str(e)
+                    }
             
             # 保存结果
             self._save_results(results)
@@ -155,9 +89,78 @@ class ExperimentEvaluator:
             
         except Exception as e:
             logger.error(f"运行实验失败: {e}")
-            raise RuntimeError(f"运行实验失败: {e}")
+            raise
             
-    def _evaluate_layout_quality(self, layout: Dict, design_info: Dict) -> Dict[str, float]:
+    def _run_benchmark_experiments(
+        self,
+        benchmark_name: str,
+        design_info: Dict
+    ) -> Dict:
+        """运行单个基准测试的实验
+        
+        Args:
+            benchmark_name: 基准测试名称
+            design_info: 设计信息
+            
+        Returns:
+            Dict: 实验结果
+        """
+        try:
+            results = {
+                'design_info': design_info,
+                'experiments': {}
+            }
+            
+            # 运行多次实验
+            for run_id in range(self.config.experiment_params['num_runs']):
+                try:
+                    logger.info(f"运行实验 {run_id + 1}/{self.config.experiment_params['num_runs']}")
+                    
+                    # 使用RAG系统生成布局
+                    layout = self.rag_system.generate_layout(design_info)
+                    
+                    # 评估布局质量
+                    quality_metrics = self._evaluate_layout_quality(layout, design_info)
+                    
+                    # 评估约束满足度
+                    constraint_metrics = self._evaluate_constraint_satisfaction(
+                        layout,
+                        design_info
+                    )
+                    
+                    # 评估优化效率
+                    efficiency_metrics = self._evaluate_optimization_efficiency(
+                        layout,
+                        design_info
+                    )
+                    
+                    # 记录结果
+                    results['experiments'][f'run_{run_id}'] = {
+                        'quality': quality_metrics,
+                        'constraints': constraint_metrics,
+                        'efficiency': efficiency_metrics
+                    }
+                    
+                except Exception as e:
+                    logger.error(f"运行实验 {run_id} 失败: {e}")
+                    results['experiments'][f'run_{run_id}'] = {
+                        'error': str(e)
+                    }
+            
+            # 计算平均值
+            results['averages'] = self._calculate_averages(results['experiments'])
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"运行基准测试实验失败: {e}")
+            raise
+            
+    def _evaluate_layout_quality(
+        self,
+        layout: Dict,
+        design_info: Dict
+    ) -> Dict:
         """评估布局质量
         
         Args:
@@ -165,18 +168,13 @@ class ExperimentEvaluator:
             design_info: 设计信息
             
         Returns:
-            布局质量指标字典
-            
-        Raises:
-            ValueError: 当输入参数无效时
+            Dict: 质量评估指标
         """
         try:
-            # 计算单元密度
-            total_area = design_info['die_area'][2] * design_info['die_area'][3]
-            placed_area = sum(comp['area'] for comp in layout['components'].values())
-            density = placed_area / total_area
+            # 计算密度
+            density = self._calculate_density(layout, design_info)
             
-            # 计算布线拥塞度
+            # 计算拥塞度
             congestion = self._calculate_congestion(layout, design_info)
             
             # 计算时序裕量
@@ -190,87 +188,152 @@ class ExperimentEvaluator:
             
         except Exception as e:
             logger.error(f"评估布局质量失败: {e}")
-            raise ValueError(f"评估布局质量失败: {e}")
+            raise
             
-    def _evaluate_constraint_satisfaction(self, layout: Dict, design_info: Dict) -> float:
-        """评估约束满足率
+    def _evaluate_constraint_satisfaction(
+        self,
+        layout: Dict,
+        design_info: Dict
+    ) -> Dict:
+        """评估约束满足度
         
         Args:
             layout: 布局信息
             design_info: 设计信息
             
         Returns:
-            约束满足率
-            
-        Raises:
-            ValueError: 当输入参数无效时
+            Dict: 约束满足度指标
         """
         try:
-            # 计算面积约束满足率
-            area_satisfaction = self._calculate_area_satisfaction(layout, design_info)
+            # 评估面积约束
+            area_satisfaction = self._evaluate_area_constraints(layout, design_info)
             
-            # 计算时序约束满足率
-            timing_satisfaction = self._calculate_timing_satisfaction(layout, design_info)
+            # 评估时序约束
+            timing_satisfaction = self._evaluate_timing_constraints(layout, design_info)
             
-            # 计算功耗约束满足率
-            power_satisfaction = self._calculate_power_satisfaction(layout, design_info)
+            # 评估功耗约束
+            power_satisfaction = self._evaluate_power_constraints(layout, design_info)
             
-            # 计算总满足率
-            weights = self.config.metrics['constraint_satisfaction']
-            total_satisfaction = (
-                weights['area_weight'] * area_satisfaction +
-                weights['timing_weight'] * timing_satisfaction +
-                weights['power_weight'] * power_satisfaction
-            )
-            
-            return total_satisfaction
+            return {
+                'area': area_satisfaction,
+                'timing': timing_satisfaction,
+                'power': power_satisfaction
+            }
             
         except Exception as e:
-            logger.error(f"评估约束满足率失败: {e}")
-            raise ValueError(f"评估约束满足率失败: {e}")
+            logger.error(f"评估约束满足度失败: {e}")
+            raise
             
-    def _calculate_averages(self, results: Dict[str, Any]):
-        """计算所有指标的平均值
+    def _evaluate_optimization_efficiency(
+        self,
+        layout: Dict,
+        design_info: Dict
+    ) -> Dict:
+        """评估优化效率
         
         Args:
-            results: 实验结果字典
+            layout: 布局信息
+            design_info: 设计信息
             
-        Raises:
-            ValueError: 当计算结果无效时
+        Returns:
+            Dict: 优化效率指标
         """
         try:
-            for category in results:
-                for method in results[category]:
-                    if isinstance(results[category][method], dict):
-                        for metric in results[category][method]:
-                            if isinstance(results[category][method][metric], list):
-                                results[category][method][metric] = np.mean(results[category][method][metric])
-                                
+            # 计算优化时间
+            optimization_time = layout.get('optimization_time', 0)
+            
+            # 计算内存使用
+            memory_usage = layout.get('memory_usage', 0)
+            
+            # 计算迭代次数
+            iteration_count = layout.get('iteration_count', 0)
+            
+            return {
+                'optimization_time': optimization_time,
+                'memory_usage': memory_usage,
+                'iteration_count': iteration_count
+            }
+            
+        except Exception as e:
+            logger.error(f"评估优化效率失败: {e}")
+            raise
+            
+    def _calculate_averages(self, experiments: Dict) -> Dict:
+        """计算实验结果的平均值
+        
+        Args:
+            experiments: 实验结果
+            
+        Returns:
+            Dict: 平均值
+        """
+        try:
+            averages = {
+                'quality': {},
+                'constraints': {},
+                'efficiency': {}
+            }
+            
+            # 收集所有有效结果
+            quality_metrics = []
+            constraint_metrics = []
+            efficiency_metrics = []
+            
+            for run_result in experiments.values():
+                if 'error' not in run_result:
+                    quality_metrics.append(run_result['quality'])
+                    constraint_metrics.append(run_result['constraints'])
+                    efficiency_metrics.append(run_result['efficiency'])
+            
+            # 计算平均值
+            if quality_metrics:
+                averages['quality'] = {
+                    'density': np.mean([m['density'] for m in quality_metrics]),
+                    'congestion': np.mean([m['congestion'] for m in quality_metrics]),
+                    'timing_margin': np.mean([m['timing_margin'] for m in quality_metrics])
+                }
+            
+            if constraint_metrics:
+                averages['constraints'] = {
+                    'area': np.mean([m['area'] for m in constraint_metrics]),
+                    'timing': np.mean([m['timing'] for m in constraint_metrics]),
+                    'power': np.mean([m['power'] for m in constraint_metrics])
+                }
+            
+            if efficiency_metrics:
+                averages['efficiency'] = {
+                    'optimization_time': np.mean([m['optimization_time'] for m in efficiency_metrics]),
+                    'memory_usage': np.mean([m['memory_usage'] for m in efficiency_metrics]),
+                    'iteration_count': np.mean([m['iteration_count'] for m in efficiency_metrics])
+                }
+            
+            return averages
+            
         except Exception as e:
             logger.error(f"计算平均值失败: {e}")
-            raise ValueError(f"计算平均值失败: {e}")
+            raise
             
-    def _save_results(self, results: Dict[str, Any]):
+    def _save_results(self, results: Dict):
         """保存实验结果
         
         Args:
-            results: 实验结果字典
-            
-        Raises:
-            IOError: 当保存结果失败时
+            results: 实验结果
         """
         try:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            results_dir = os.path.join(os.path.dirname(__file__), '../../results')
-            os.makedirs(results_dir, exist_ok=True)
+            # 创建结果目录
+            os.makedirs(self.config.results_dir, exist_ok=True)
             
-            # 保存详细结果
-            detailed_file = os.path.join(results_dir, f'experiment_results_{timestamp}.json')
-            with open(detailed_file, 'w') as f:
+            # 生成结果文件名
+            timestamp = results['timestamp']
+            filename = f"experiment_results_{timestamp}.json"
+            filepath = os.path.join(self.config.results_dir, filename)
+            
+            # 保存结果
+            with open(filepath, 'w') as f:
                 json.dump(results, f, indent=2)
-                
-            logger.info(f"实验结果已保存到: {detailed_file}")
+            
+            logger.info(f"实验结果已保存到: {filepath}")
             
         except Exception as e:
             logger.error(f"保存实验结果失败: {e}")
-            raise IOError(f"保存实验结果失败: {e}") 
+            raise 

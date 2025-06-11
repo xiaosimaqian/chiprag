@@ -85,6 +85,7 @@ class MultiObjectiveEvaluator:
             
             # 5. 返回评估结果
             return {
+                'wirelength': self._calculate_wirelength(data['layout']),
                 'wirelength_score': wirelength_score,
                 'congestion_score': congestion_score,
                 'timing_score': timing_score,
@@ -116,6 +117,7 @@ class MultiObjectiveEvaluator:
         except Exception as e:
             logger.error(f"评估失败: {str(e)}")
             return {
+                'wirelength': 0.0,
                 'wirelength_score': 0.0,
                 'congestion_score': 0.0,
                 'timing_score': 0.0,

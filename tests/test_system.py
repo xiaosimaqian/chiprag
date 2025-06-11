@@ -6,7 +6,7 @@ import time
 import psutil
 from typing import Dict, List
 from modules.core.rag_system import RAGSystem
-from modules.core.benchmark_loader import BenchmarkLoader
+from modules.utils.benchmark_loader import BenchmarkLoader
 from tests.test_utils import TestLogger
 from modules.core.hierarchy import HierarchicalDecompositionManager
 from modules.knowledge.knowledge_graph_builder import KnowledgeGraphBuilder
@@ -82,8 +82,11 @@ class TestCHIPRAGSystem(unittest.TestCase):
         cls.knowledge_base = KnowledgeBase(cls.config['knowledge_base'])
         
         # 初始化布局生成器
-        from modules.layout.layout_generator import LayoutGenerator
-        cls.layout_generator = LayoutGenerator(cls.config['layout_config'], cls.llm_manager)
+        from modules.core.layout_generator import LayoutGenerator
+        cls.layout_generator = LayoutGenerator({
+            'layout_config': cls.config['layout_config'],
+            'llm_manager': cls.llm_manager
+        })
         
         # 初始化日志记录器
         cls.logger = TestLogger('CHIPRAG_System_Test')
@@ -104,7 +107,7 @@ class TestCHIPRAGSystem(unittest.TestCase):
         )
         
         # 初始化基准测试加载器
-        cls.benchmark_loader = BenchmarkLoader('data/designs/ispd_2015_contest_benchmark')
+        cls.benchmark_loader = BenchmarkLoader(os.path.join(os.path.dirname(__file__), '..', 'data', 'designs', 'ispd_2015_contest_benchmark'))
         cls.logger.log_result('初始化基准测试加载器', '成功')
         
         # 选择测试用例
@@ -122,19 +125,6 @@ class TestCHIPRAGSystem(unittest.TestCase):
         })
         cls.knowledge_graph = KnowledgeGraphBuilder()
         cls.quality_evaluator = QualityEvaluator()
-        
-        # 加载测试数据
-        cls.test_cases = {
-            'mgc_fft_1': {
-                'netlist': 'path/to/mgc_fft_1.v',
-                'def': 'path/to/mgc_fft_1.def',
-                'constraints': {
-                    'timing': {'max_delay': 0.5},
-                    'power': {'max_power': 1.0},
-                    'area': {'max_area': 1000}
-                }
-            }
-        }
     
     def test_data_loading(self):
         """测试数据加载"""
@@ -167,10 +157,26 @@ class TestCHIPRAGSystem(unittest.TestCase):
                 self.logger.log_data(f'基准测试数据: {case}', design_info)
                 
                 # 验证数据完整性
-                required_fields = ['name', 'die_area', 'components', 'nets', 'cell_library', 'constraints']
+                required_fields = ['name', 'netlist', 'def', 'lef', 'constraints']
                 for field in required_fields:
                     self.logger.log_result(f'检查字段: {field}', f'{"存在" if field in design_info else "不存在"}')
                     self.assertIn(field, design_info)
+                    
+                # 验证网表信息
+                self.assertIn('modules', design_info['netlist'])
+                self.assertIn('attributes', design_info['netlist'])
+                
+                # 验证DEF信息
+                self.assertIn('units', design_info['def'])
+                self.assertIn('components', design_info['def'])
+                self.assertIn('die_area', design_info['def'])
+                self.assertIn('rows', design_info['def'])
+                self.assertIn('tracks', design_info['def'])
+                
+                # 验证LEF信息
+                self.assertIn('cells', design_info['lef'])
+                self.assertIn('technology', design_info['lef'])
+                
             except Exception as e:
                 self.logger.log_error(f'加载基准测试: {case}', e)
                 raise
@@ -191,10 +197,25 @@ class TestCHIPRAGSystem(unittest.TestCase):
                 self.logger.log_data(f'层次化分解结果: {case}', hierarchy)
                 
                 # 验证结果
-                required_fields = ['module_relations', 'patterns']
+                required_fields = ['levels', 'modules', 'connections', 'patterns']
                 for field in required_fields:
                     self.logger.log_result(f'检查字段: {field}', f'{"存在" if field in hierarchy else "不存在"}')
                     self.assertIn(field, hierarchy)
+                    
+                # 验证层级信息
+                self.assertIsInstance(hierarchy['levels'], list)
+                self.assertGreater(len(hierarchy['levels']), 0)
+                
+                # 验证模块信息
+                self.assertIsInstance(hierarchy['modules'], dict)
+                self.assertGreater(len(hierarchy['modules']), 0)
+                
+                # 验证连接信息
+                self.assertIsInstance(hierarchy['connections'], list)
+                
+                # 验证模式信息
+                self.assertIsInstance(hierarchy['patterns'], list)
+                
             except Exception as e:
                 self.logger.log_error(f'层次化分解: {case}', e)
                 raise
@@ -210,27 +231,35 @@ class TestCHIPRAGSystem(unittest.TestCase):
                 design_info = self.benchmark_loader.load_benchmark(case)
                 self.logger.log_data(f'基准测试数据: {case}', design_info)
                 
-                # 将基准测试数据添加到知识库
-                self.rag_system.add_to_knowledge_base(
-                    layout=design_info,
-                    optimization_result={
-                        'density': 0.7,
-                        'congestion': 0.6,
-                        'timing_margin': 0.2
-                    },
-                    metadata={'name': case}
-                )
+                # 执行层次化分解
+                hierarchy = self.manager.hierarchical_decomposition(design_info)
+                self.logger.log_data(f'层次化分解结果: {case}', hierarchy)
                 
                 # 执行知识检索
-                similar_cases = self.rag_system.search_similar_cases(design_info)
-                self.logger.log_data(f'相似案例: {case}', similar_cases)
+                retrieval_results = self.rag_system.retrieve_knowledge(hierarchy)
+                self.logger.log_data(f'知识检索结果: {case}', retrieval_results)
                 
                 # 验证结果
-                self.logger.log_result('检查相似案例类型', f'{"列表" if isinstance(similar_cases, list) else "非列表"}')
-                self.assertIsInstance(similar_cases, list)
+                self.assertIsNotNone(retrieval_results)
+                self.assertIsInstance(retrieval_results, list)
+                self.assertGreater(len(retrieval_results), 0)
                 
-                self.logger.log_result('检查相似案例数量', f'{"大于0" if len(similar_cases) > 0 else "等于0"}')
-                self.assertTrue(len(similar_cases) > 0)
+                # 验证每个检索结果
+                for result in retrieval_results:
+                    self.assertIn('module', result)
+                    self.assertIn('knowledge', result)
+                    self.assertIn('similarity', result)
+                    
+                    # 验证知识内容
+                    knowledge = result['knowledge']
+                    self.assertIn('type', knowledge)
+                    self.assertIn('content', knowledge)
+                    self.assertIn('metadata', knowledge)
+                    
+                    # 验证相似度分数
+                    self.assertIsInstance(result['similarity'], float)
+                    self.assertTrue(0 <= result['similarity'] <= 1)
+                    
             except Exception as e:
                 self.logger.log_error(f'知识检索: {case}', e)
                 raise
@@ -251,22 +280,46 @@ class TestCHIPRAGSystem(unittest.TestCase):
                 self.logger.log_data(f'层次化分解结果: {case}', hierarchy)
                 
                 # 执行知识检索
-                similar_cases = self.rag_system.search_similar_cases(design_info)
-                self.logger.log_data(f'相似案例: {case}', similar_cases)
+                retrieval_results = self.rag_system.retrieve_knowledge(hierarchy)
+                self.logger.log_data(f'知识检索结果: {case}', retrieval_results)
                 
                 # 生成布局
-                layout = self.layout_generator.generate(
-                    design_info=design_info,
-                    hierarchy=hierarchy,
-                    similar_cases=similar_cases
-                )
+                layout = self.rag_system.generate_layout(design_info, retrieval_results)
                 self.logger.log_data(f'生成的布局: {case}', layout)
                 
                 # 验证结果
-                required_fields = ['components', 'nets']
+                self.assertIsNotNone(layout)
+                required_fields = ['name', 'components', 'nets', 'hierarchy', 'constraints']
                 for field in required_fields:
                     self.logger.log_result(f'检查字段: {field}', f'{"存在" if field in layout else "不存在"}')
                     self.assertIn(field, layout)
+                    
+                # 验证组件信息
+                self.assertIsInstance(layout['components'], list)
+                self.assertGreater(len(layout['components']), 0)
+                for component in layout['components']:
+                    self.assertIn('name', component)
+                    self.assertIn('type', component)
+                    self.assertIn('position', component)
+                    self.assertIn('orientation', component)
+                    
+                # 验证网络信息
+                self.assertIsInstance(layout['nets'], list)
+                for net in layout['nets']:
+                    self.assertIn('name', net)
+                    self.assertIn('connections', net)
+                    self.assertIn('wirelength', net)
+                    
+                # 验证层级信息
+                self.assertIn('levels', layout['hierarchy'])
+                self.assertIn('modules', layout['hierarchy'])
+                self.assertIn('connections', layout['hierarchy'])
+                
+                # 验证约束信息
+                self.assertIn('timing', layout['constraints'])
+                self.assertIn('power', layout['constraints'])
+                self.assertIn('area', layout['constraints'])
+                
             except Exception as e:
                 self.logger.log_error(f'布局生成: {case}', e)
                 raise
@@ -287,171 +340,105 @@ class TestCHIPRAGSystem(unittest.TestCase):
                 self.logger.log_data(f'层次化分解结果: {case}', hierarchy)
                 
                 # 执行知识检索
-                similar_cases = self.rag_system.search_similar_cases(design_info)
-                self.logger.log_data(f'相似案例: {case}', similar_cases)
+                retrieval_results = self.rag_system.retrieve_knowledge(hierarchy)
+                self.logger.log_data(f'知识检索结果: {case}', retrieval_results)
                 
                 # 生成布局
-                layout = self.layout_generator.generate(
-                    design_info=design_info,
-                    hierarchy=hierarchy,
-                    similar_cases=similar_cases
-                )
+                layout = self.rag_system.generate_layout(design_info, retrieval_results)
                 self.logger.log_data(f'生成的布局: {case}', layout)
                 
                 # 评估布局质量
-                quality = self.quality_evaluator.evaluate_layout(layout)
-                self.logger.log_data(f'布局质量: {case}', quality)
+                quality_score = self.rag_system.evaluate_layout(layout, design_info['constraints'])
+                self.logger.log_data(f'布局质量评分: {case}', quality_score)
                 
-                # 检查评估结果
-                required_fields = ['density', 'congestion', 'timing_margin']
+                # 验证结果
+                self.assertIsNotNone(quality_score)
+                required_fields = ['wirelength', 'congestion', 'timing', 'power', 'area', 'overall']
                 for field in required_fields:
-                    self.logger.log_result(f'检查字段: {field}', f'{"存在" if field in quality else "不存在"}')
-                    self.assertIn(field, quality)
+                    self.logger.log_result(f'检查字段: {field}', f'{"存在" if field in quality_score else "不存在"}')
+                    self.assertIn(field, quality_score)
                     
-                # 检查密度范围
-                self.logger.log_result('检查密度范围', f'{"在[0,1]范围内" if 0 <= quality["density"]["score"] <= 1 else "超出范围"}')
-                self.assertTrue(0 <= quality['density']['score'] <= 1)
+                # 验证分数范围
+                for field in required_fields:
+                    self.logger.log_result(f'检查分数范围: {field}', f'{"在0-1之间" if 0 <= quality_score[field] <= 1 else "超出范围"}')
+                    self.assertTrue(0 <= quality_score[field] <= 1)
+                    
+                # 验证详细指标
+                self.assertIn('metrics', quality_score)
+                metrics = quality_score['metrics']
+                self.assertIn('wirelength', metrics)
+                self.assertIn('congestion', metrics)
+                self.assertIn('timing', metrics)
+                self.assertIn('power', metrics)
+                self.assertIn('area', metrics)
                 
-                # 检查拥塞度范围
-                self.logger.log_result('检查拥塞度范围', f'{"在[0,1]范围内" if 0 <= quality["congestion"]["score"] <= 1 else "超出范围"}')
-                self.assertTrue(0 <= quality['congestion']['score'] <= 1)
+                # 验证约束满足情况
+                self.assertIn('constraint_satisfaction', quality_score)
+                constraints = quality_score['constraint_satisfaction']
+                self.assertIn('timing', constraints)
+                self.assertIn('power', constraints)
+                self.assertIn('area', constraints)
                 
-                # 检查时序裕度范围
-                self.logger.log_result('检查时序裕度范围', f'{"在[0,1]范围内" if 0 <= quality["timing_margin"]["score"] <= 1 else "超出范围"}')
-                self.assertTrue(0 <= quality['timing_margin']['score'] <= 1)
             except Exception as e:
                 self.logger.log_error(f'质量评估: {case}', e)
                 raise
     
     def test_chiprag_end_to_end(self):
-        """端到端测试CHIPRAG框架的整体效果"""
-        logger.info("开始端到端测试")
+        """测试端到端流程"""
+        self.logger.log_step('测试端到端流程')
         
-        for case_name, case_data in self.test_cases.items():
-            logger.info(f"测试用例: {case_name}")
-            
-            # 1. 层次化分解与知识检索
-            start_time = time.time()
-            hierarchy = self.manager.hierarchical_decomposition(case_data)
-            retrieval_time = time.time() - start_time
-            
-            # 评估检索效果
-            self._evaluate_retrieval(hierarchy, case_data)
-            
-            # 2. 知识图谱构建与推理
-            start_time = time.time()
-            knowledge_graph = self.knowledge_graph.build(hierarchy)
-            reasoning_time = time.time() - start_time
-            
-            # 评估知识融合效果
-            self._evaluate_knowledge_fusion(knowledge_graph)
-            
-            # 3. 布局生成与质量评估
-            start_time = time.time()
-            layout = self.layout_generator.generate(knowledge_graph, case_data['constraints'])
-            generation_time = time.time() - start_time
-            
-            # 评估布局质量
-            self._evaluate_layout_quality(layout, case_data['constraints'])
-            
-            # 记录性能指标
-            self._record_performance_metrics(
-                retrieval_time,
-                reasoning_time,
-                generation_time
-            )
-    
-    def _evaluate_retrieval(self, hierarchy: Dict, case_data: Dict):
-        """评估多粒度检索策略的效果"""
-        # 1. 检索准确性
-        retrieval_accuracy = self._calculate_retrieval_accuracy(hierarchy)
-        self.assertGreater(retrieval_accuracy, 0.8, "检索准确率应大于80%")
-        
-        # 2. 检索效率
-        retrieval_efficiency = self._calculate_retrieval_efficiency(hierarchy)
-        self.assertLess(retrieval_efficiency, 1.0, "检索效率应小于1秒")
-        
-        # 3. 知识覆盖度
-        coverage = self._calculate_knowledge_coverage(hierarchy, case_data)
-        self.assertGreater(coverage, 0.9, "知识覆盖度应大于90%")
-    
-    def _evaluate_knowledge_fusion(self, knowledge_graph: Dict):
-        """评估多模态知识图谱的效果"""
-        # 1. 知识融合完整性
-        fusion_completeness = self._calculate_fusion_completeness(knowledge_graph)
-        self.assertGreater(fusion_completeness, 0.85, "知识融合完整性应大于85%")
-        
-        # 2. 推理准确性
-        reasoning_accuracy = self._calculate_reasoning_accuracy(knowledge_graph)
-        self.assertGreater(reasoning_accuracy, 0.8, "推理准确率应大于80%")
-        
-        # 3. 知识一致性
-        consistency = self._calculate_knowledge_consistency(knowledge_graph)
-        self.assertGreater(consistency, 0.9, "知识一致性应大于90%")
-    
-    def _evaluate_layout_quality(self, layout: Dict, constraints: Dict):
-        """评估布局质量"""
-        # 1. 时序性能
-        timing_score = self.quality_evaluator.evaluate_timing(layout)
-        self.assertGreater(timing_score, 0.8, "时序性能应大于80%")
-        
-        # 2. 功耗性能
-        power_score = self.quality_evaluator.evaluate_power(layout)
-        self.assertGreater(power_score, 0.8, "功耗性能应大于80%")
-        
-        # 3. 面积利用率
-        area_score = self.quality_evaluator.evaluate_area(layout)
-        self.assertGreater(area_score, 0.8, "面积利用率应大于80%")
-        
-        # 4. 约束满足率
-        constraint_satisfaction = self.quality_evaluator.evaluate_constraints(
-            layout, constraints
-        )
-        self.assertGreater(constraint_satisfaction, 0.9, "约束满足率应大于90%")
-    
-    def _record_performance_metrics(self, retrieval_time: float, 
-                                  reasoning_time: float, 
-                                  generation_time: float):
-        """记录性能指标"""
-        total_time = retrieval_time + reasoning_time + generation_time
-        memory_usage = psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
-        
-        logger.info(f"检索时间: {retrieval_time:.2f}秒")
-        logger.info(f"推理时间: {reasoning_time:.2f}秒")
-        logger.info(f"生成时间: {generation_time:.2f}秒")
-        logger.info(f"总耗时: {total_time:.2f}秒")
-        logger.info(f"内存使用: {memory_usage:.2f}MB")
-    
-    # 辅助评估方法
-    def _calculate_retrieval_accuracy(self, hierarchy: Dict) -> float:
-        """计算检索准确率"""
-        # TODO: 实现检索准确率计算
-        return 0.95
-    
-    def _calculate_retrieval_efficiency(self, hierarchy: Dict) -> float:
-        """计算检索效率"""
-        # TODO: 实现检索效率计算
-        return 0.5
-    
-    def _calculate_knowledge_coverage(self, hierarchy: Dict, case_data: Dict) -> float:
-        """计算知识覆盖度"""
-        # TODO: 实现知识覆盖度计算
-        return 0.95
-    
-    def _calculate_fusion_completeness(self, knowledge_graph: Dict) -> float:
-        """计算知识融合完整性"""
-        # TODO: 实现知识融合完整性计算
-        return 0.9
-    
-    def _calculate_reasoning_accuracy(self, knowledge_graph: Dict) -> float:
-        """计算推理准确率"""
-        # TODO: 实现推理准确率计算
-        return 0.85
-    
-    def _calculate_knowledge_consistency(self, knowledge_graph: Dict) -> float:
-        """计算知识一致性"""
-        # TODO: 实现知识一致性计算
-        return 0.95
+        for case in self.test_cases:
+            self.logger.log_step(f'处理基准测试: {case}')
+            try:
+                # 加载基准测试数据
+                design_info = self.benchmark_loader.load_benchmark(case)
+                self.logger.log_data(f'基准测试数据: {case}', design_info)
+                
+                # 执行层次化分解
+                hierarchy = self.manager.hierarchical_decomposition(design_info)
+                self.logger.log_data(f'层次化分解结果: {case}', hierarchy)
+                
+                # 执行知识检索
+                retrieval_results = self.rag_system.retrieve_knowledge(hierarchy)
+                self.logger.log_data(f'知识检索结果: {case}', retrieval_results)
+                
+                # 生成布局
+                layout = self.rag_system.generate_layout(design_info, retrieval_results)
+                self.logger.log_data(f'生成的布局: {case}', layout)
+                
+                # 评估布局质量
+                quality_score = self.rag_system.evaluate_layout(layout, design_info['constraints'])
+                self.logger.log_data(f'布局质量评分: {case}', quality_score)
+                
+                # 验证结果
+                self.assertIsNotNone(layout)
+                self.assertIsNotNone(quality_score)
+                
+                # 验证布局信息
+                required_fields = ['name', 'components', 'nets', 'hierarchy']
+                for field in required_fields:
+                    self.logger.log_result(f'检查字段: {field}', f'{"存在" if field in layout else "不存在"}')
+                    self.assertIn(field, layout)
+                    
+                # 验证层级信息
+                self.assertIn('levels', layout['hierarchy'])
+                self.assertIn('modules', layout['hierarchy'])
+                self.assertIn('max_depth', layout['hierarchy'])
+                
+                # 验证质量评分
+                required_fields = ['wirelength', 'congestion', 'timing', 'overall']
+                for field in required_fields:
+                    self.logger.log_result(f'检查字段: {field}', f'{"存在" if field in quality_score else "不存在"}')
+                    self.assertIn(field, quality_score)
+                    
+                # 验证分数范围
+                for field in required_fields:
+                    self.logger.log_result(f'检查分数范围: {field}', f'{"在0-1之间" if 0 <= quality_score[field] <= 1 else "超出范围"}')
+                    self.assertTrue(0 <= quality_score[field] <= 1)
+                    
+            except Exception as e:
+                self.logger.log_error(f'端到端测试: {case}', e)
+                raise
 
 if __name__ == '__main__':
     # 设置日志

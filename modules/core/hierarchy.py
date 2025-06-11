@@ -21,10 +21,13 @@ class Node:
     attributes: Dict[str, Any] = field(default_factory=dict)
     features: Dict[str, Any] = field(default_factory=dict)
     parent: Optional['Node'] = None
+    knowledge: Dict[str, Any] = field(default_factory=dict)
     
     def __post_init__(self):
         if self.features is None:
             self.features = {}
+        if self.knowledge is None:
+            self.knowledge = {}
     
     def add_child(self, child: 'Node'):
         """添加子节点
@@ -71,6 +74,22 @@ class Node:
             if result is not None:
                 return result
         return None
+        
+    def get_knowledge(self) -> Dict[str, Any]:
+        """获取节点知识
+        
+        Returns:
+            节点知识
+        """
+        return self.knowledge
+        
+    def add_knowledge(self, knowledge: Dict[str, Any]) -> None:
+        """添加节点知识
+        
+        Args:
+            knowledge: 要添加的知识
+        """
+        self.knowledge.update(knowledge)
 
 class Hierarchy:
     """层次结构管理类"""
@@ -372,6 +391,66 @@ class HierarchicalDecompositionManager:
             'completeness': {}
         }
         
+    def hierarchical_decomposition(self, design_info: Dict[str, Any]) -> Dict[str, Any]:
+        """执行层次化分解
+        
+        Args:
+            design_info: 设计信息
+            
+        Returns:
+            层次化分解结果
+        """
+        try:
+            # 1. 分析设计信息
+            analysis = self.llm_manager.analyze_hierarchy(design_info)
+            
+            # 2. 构建层次结构
+            hierarchy = {
+                'levels': [],
+                'modules': {},
+                'connections': [],
+                'patterns': []
+            }
+            
+            # 3. 处理每个层次
+            for level in self.levels:
+                level_name = level['name']
+                threshold = level['threshold']
+                
+                # 获取当前层次的组件
+                components = self._get_components(level_name)
+                
+                # 计算相似度
+                similarities = self._calculate_similarities(analysis, components)
+                
+                # 过滤结果
+                filtered = self._filter_results(similarities, threshold)
+                
+                # 添加到层次结构
+                hierarchy['levels'].append({
+                    'name': level_name,
+                    'components': filtered
+                })
+                
+                # 更新模块信息
+                for item in filtered:
+                    module_name = item['component']['name']
+                    hierarchy['modules'][module_name] = item['component']
+                    
+                    # 添加连接信息
+                    if 'connections' in item['component']:
+                        hierarchy['connections'].extend(item['component']['connections'])
+                        
+                    # 添加模式信息
+                    if 'patterns' in item['component']:
+                        hierarchy['patterns'].extend(item['component']['patterns'])
+            
+            return hierarchy
+            
+        except Exception as e:
+            logging.error(f"层次化分解失败: {str(e)}")
+            raise
+            
     def decompose(self, query: Dict[str, Any]) -> List[Dict[str, Any]]:
         """分解查询"""
         try:

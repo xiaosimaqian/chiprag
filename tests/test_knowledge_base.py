@@ -75,6 +75,11 @@ class TestKnowledgeBase(unittest.TestCase):
                 'area': 100,
                 'power': 0.5
             },
+            'hierarchy': {
+                'levels': ['top', 'block'],
+                'modules': ['test_block'],
+                'max_depth': 2
+            },
             'components': [
                 {
                     'name': 'comp1',
@@ -104,6 +109,9 @@ class TestKnowledgeBase(unittest.TestCase):
         self.assertTrue(len(results) > 0)
         self.assertTrue('name' in results[0])
         self.assertEqual(results[0]["name"], "test_block")
+        self.assertTrue('hierarchy' in results[0])
+        self.assertTrue('levels' in results[0]['hierarchy'])
+        self.assertIn('block', results[0]['hierarchy']['levels'])
 
 if __name__ == '__main__':
     unittest.main() 

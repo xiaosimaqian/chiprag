@@ -174,5 +174,79 @@ class MultiGranularityRetrieval:
         return self
 
     def retrieve(self, query, top_k=3):
-        """检索知识"""
-        return self.knowledge_base.get_similar_cases(query, top_k=top_k)
+        """检索知识
+        
+        Args:
+            query: 查询信息
+            top_k: 返回结果数量
+            
+        Returns:
+            List[Dict]: 检索结果列表
+        """
+        try:
+            # 获取相似案例
+            similar_cases = self.knowledge_base.get_similar_cases(query, top_k=top_k)
+            
+            # 根据当前粒度过滤结果
+            if self.current_granularity:
+                filtered_results = []
+                for case in similar_cases:
+                    if 'hierarchy' in case and 'levels' in case['hierarchy']:
+                        if self.current_granularity in case['hierarchy']['levels']:
+                            filtered_results.append(case)
+                return filtered_results
+                
+            return similar_cases
+            
+        except Exception as e:
+            logger.error(f"检索失败: {str(e)}")
+            return []
+            
+    def evaluate_retrieval(self, query: Dict[str, Any], ground_truth: List[Dict[str, Any]]) -> Dict[str, float]:
+        """评估检索结果
+        
+        Args:
+            query: 查询信息
+            ground_truth: 标准答案列表
+            
+        Returns:
+            Dict[str, float]: 评估指标，包括precision、recall和f1_score
+        """
+        try:
+            # 执行检索
+            results = self.retrieve(query)
+            
+            # 计算相关文档集合
+            relevant_docs = set(doc['id'] for doc in ground_truth)
+            retrieved_docs = set(doc['id'] for doc in results)
+            
+            # 计算评估指标
+            if not retrieved_docs:
+                return {
+                    'precision': 0.0,
+                    'recall': 0.0,
+                    'f1_score': 0.0
+                }
+                
+            # 计算precision
+            precision = len(relevant_docs & retrieved_docs) / len(retrieved_docs)
+            
+            # 计算recall
+            recall = len(relevant_docs & retrieved_docs) / len(relevant_docs) if relevant_docs else 0.0
+            
+            # 计算f1_score
+            f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+            
+            return {
+                'precision': precision,
+                'recall': recall,
+                'f1_score': f1_score
+            }
+            
+        except Exception as e:
+            logger.error(f"评估失败: {str(e)}")
+            return {
+                'precision': 0.0,
+                'recall': 0.0,
+                'f1_score': 0.0
+            }

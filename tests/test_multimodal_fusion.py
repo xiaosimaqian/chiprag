@@ -3,9 +3,11 @@
 import unittest
 import json
 import torch
+import numpy as np
 from pathlib import Path
 from typing import Dict, List, Any
 import logging
+import shutil
 
 from modules.core.chip_retriever import ChipRetriever
 from modules.utils.config_loader import ConfigLoader
@@ -21,37 +23,61 @@ class TestMultimodalFusion(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """设置测试环境"""
+        # 创建测试目录
+        cls.test_dir = Path('/tmp/chiprag_test')
+        cls.test_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 创建模型目录
+        cls.model_dir = cls.test_dir / 'models'
+        cls.model_dir.mkdir(exist_ok=True)
+        
+        # 创建缓存目录
+        cls.cache_dir = cls.test_dir / 'cache'
+        cls.cache_dir.mkdir(exist_ok=True)
+        
         # 设置测试配置
         cls.config = {
             'knowledge_base': {
-                'path': '/tmp/chiprag_test',
+                'path': str(cls.test_dir),
                 'format': 'json',
-                'text_path': '/tmp/chiprag_test/text',
-                'image_path': '/tmp/chiprag_test/images',
-                'structured_data_path': '/tmp/chiprag_test/structured',
-                'graph_path': '/tmp/chiprag_test/graph',
-                'layout_experience_path': '/tmp/chiprag_test/layout',
-                'cache_dir': '/tmp/chiprag_test/cache'
+                'text_path': str(cls.test_dir / 'text'),
+                'image_path': str(cls.test_dir / 'images'),
+                'structured_data_path': str(cls.test_dir / 'structured'),
+                'graph_path': str(cls.test_dir / 'graph'),
+                'layout_experience_path': str(cls.test_dir / 'layout'),
+                'cache_dir': str(cls.cache_dir)
             },
             'fusion': {
                 'text_weight': 0.4,
                 'image_weight': 0.3,
                 'graph_weight': 0.3
+            },
+            'text_encoder': {
+                'use_ollama': True,
+                'ollama_model': 'llama2',
+                'ollama_url': 'http://localhost:11434',
+                'model_path': str(cls.model_dir / 'bert')
+            },
+            'image_encoder': {
+                'model_path': str(cls.model_dir / 'resnet50')
+            },
+            'graph_encoder': {
+                'model_path': str(cls.model_dir / 'graphsage')
             }
         }
         
         # 创建测试数据
         cls.test_data = {
             'text': {
-                'features': [0.1, 0.2, 0.3],
+                'features': np.random.rand(768).astype(np.float32),
                 'metadata': {'name': 'Test Text'}
             },
             'image': {
-                'features': [0.4, 0.5, 0.6],
+                'features': np.random.rand(2048).astype(np.float32),
                 'metadata': {'name': 'Test Image'}
             },
             'graph': {
-                'features': [0.7, 0.8, 0.9],
+                'features': np.random.rand(512).astype(np.float32),
                 'metadata': {'name': 'Test Graph'}
             }
         }
@@ -239,6 +265,89 @@ class TestMultimodalFusion(unittest.TestCase):
         self.assertIn('metadata', fused_features)
         self.assertIsInstance(fused_features['features'], list)
         self.assertEqual(len(fused_features['features']), 3)
+
+    def test_fusion_weights(self):
+        """测试融合权重"""
+        weights = self.fusion.weights
+        self.assertAlmostEqual(sum(weights.values()), 1.0)
+        self.assertGreater(weights['text'], 0)
+        self.assertGreater(weights['image'], 0)
+        self.assertGreater(weights['graph'], 0)
+        
+    def test_feature_fusion(self):
+        """测试特征融合"""
+        # 融合特征
+        fused_data = self.fusion.fuse(self.test_data)
+        
+        # 验证结果
+        self.assertIn('features', fused_data)
+        self.assertIn('metadata', fused_data)
+        self.assertIsInstance(fused_data['features'], list)
+        self.assertIsInstance(fused_data['metadata'], dict)
+        
+    def test_retrieval(self):
+        """测试检索功能"""
+        # 准备查询
+        query = {
+            'text': 'test query',
+            'image': np.random.rand(224, 224, 3).astype(np.float32),
+            'graph': {'nodes': [], 'edges': []}
+        }
+        
+        # 执行检索
+        results = self.retriever.modal_retriever.retrieve(
+            query,
+            context={'knowledge_base': [self.test_data]}
+        )
+        
+        # 验证结果
+        self.assertIsInstance(results, list)
+        if results:
+            self.assertIn('similarity', results[0])
+            self.assertIn('modality_similarities', results[0])
+            
+    def test_similarity_computation(self):
+        """测试相似度计算"""
+        # 准备测试数据
+        query = {
+            'text': 'test query',
+            'image': np.random.rand(224, 224, 3).astype(np.float32),
+            'graph': {'nodes': [], 'edges': []}
+        }
+        
+        # 计算相似度
+        similarity = self.retriever.modal_retriever.compute_similarity(
+            query,
+            self.test_data
+        )
+        
+        # 验证结果
+        self.assertIsInstance(similarity, float)
+        self.assertGreaterEqual(similarity, 0)
+        self.assertLessEqual(similarity, 1)
+        
+    def test_error_handling(self):
+        """测试错误处理"""
+        # 测试空数据
+        with self.assertRaises(ValueError):
+            self.fusion.fuse({})
+            
+        # 测试无效特征
+        invalid_data = {
+            'text': {
+                'features': np.array([np.nan]),
+                'metadata': {}
+            }
+        }
+        with self.assertRaises(ValueError):
+            self.fusion.fuse(invalid_data)
+            
+    @classmethod
+    def tearDownClass(cls):
+        """清理测试环境"""
+        # 清理临时文件
+        if cls.test_dir.exists():
+            shutil.rmtree(cls.test_dir)
 
 def main():
     """运行测试"""

@@ -72,7 +72,7 @@ class TestMultiGranularityRetrieval(unittest.TestCase):
         target_node = self.hierarchy.nodes["component1"]
         
         # 执行知识迁移
-        transferred_knowledge = self.knowledge_transfer.transfer_knowledge(source_node, target_node)
+        transferred_knowledge = self.knowledge_transfer.transfer(source_node, target_node)
         
         # 验证迁移结果
         self.assertIsNotNone(transferred_knowledge)

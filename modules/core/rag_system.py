@@ -544,42 +544,65 @@ class RAGSystem:
         return route
 
     def retrieve_and_enhance(self, query: Dict, hierarchy_info: Dict) -> Dict[str, Any]:
-        """检索和增强知识
+        """检索并增强知识
         
         Args:
             query: 查询信息
             hierarchy_info: 层次化信息
             
         Returns:
-            增强后的知识
+            Dict[str, Any]: 增强后的知识
         """
-        logger.info("开始检索和增强知识")
-        
-        # 1. 检索相似案例
-        similar_cases = self.knowledge_base.get_similar_cases(
-            query,
-            top_k=5,
-            level='global'
-        )
-        logger.info(f"找到 {len(similar_cases)} 个相似案例")
-        
-        # 2. 提取知识
-        knowledge = {
-            'layout_patterns': self._extract_layout_patterns(similar_cases),
-            'constraints': self._extract_constraints(similar_cases),
-            'optimization_guidelines': self._extract_optimization_guidelines(similar_cases)
-        }
-        
-        # 3. 使用LLM增强知识
-        if self.llm_manager:
-            enhanced_knowledge = self.llm_manager.enhance_knowledge(
-                knowledge,
-                hierarchy_info
+        try:
+            # 1. 检索相似案例
+            similar_cases = self.knowledge_base.get_similar_cases(
+                query,
+                top_k=5,
+                level='global'
             )
-            logger.info("知识增强完成")
+            logger.info(f"找到 {len(similar_cases)} 个相似案例")
+            
+            # 2. 提取约束
+            constraints = self._extract_constraints(similar_cases)
+            logger.info(f"提取出 {len(constraints)} 个约束")
+            
+            # 3. 提取优化指南
+            optimization_guidelines = self._extract_optimization_guidelines(similar_cases)
+            logger.info(f"提取出 {len(optimization_guidelines)} 个优化指南")
+            
+            # 4. 使用LLM分析和增强知识
+            enhanced_knowledge = {
+                'constraints': constraints,
+                'optimization_guidelines': optimization_guidelines,
+                'similar_cases': similar_cases
+            }
+            
+            if self.llm_manager:
+                # 4.1 分析约束
+                constraint_analysis = self.llm_manager.analyze_constraints(constraints)
+                enhanced_knowledge['constraint_analysis'] = constraint_analysis
+                
+                # 4.2 分析优化指南
+                guideline_analysis = self.llm_manager.analyze_optimization_guidelines(optimization_guidelines)
+                enhanced_knowledge['guideline_analysis'] = guideline_analysis
+                
+                # 4.3 生成综合建议
+                suggestions = self.llm_manager.generate_suggestions(
+                    enhanced_knowledge,
+                    hierarchy_info
+                )
+                enhanced_knowledge['suggestions'] = suggestions
+            
             return enhanced_knowledge
             
-        return knowledge
+        except Exception as e:
+            logger.error(f"知识检索和增强失败: {str(e)}")
+            return {
+                'constraints': [],
+                'optimization_guidelines': [],
+                'similar_cases': [],
+                'error': str(e)
+            }
         
     def _extract_constraints(self, cases: List[Dict]) -> List[Dict]:
         """提取约束信息

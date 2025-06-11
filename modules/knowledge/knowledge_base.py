@@ -430,26 +430,31 @@ class KnowledgeBase:
         Returns:
             相似案例列表
         """
-        # 提取查询布局的特征
-        query_features = self._extract_global_features(query)
-        
-        # 计算与所有案例的相似度
-        similarities = []
-        for case in self.cases:
-            if 'layout' in case:
-                case_features = self._extract_global_features(case['layout'])
-                similarity = self._compute_similarity(query_features, case_features)
-                if similarity >= similarity_threshold:
-                    similarities.append({
-                        'case': case,
-                        'similarity': similarity
-                    })
-        
-        # 按相似度排序
-        similarities.sort(key=lambda x: x['similarity'], reverse=True)
-        
-        # 返回top_k个最相似的案例
-        return [item['case'] for item in similarities[:top_k]]
+        try:
+            # 提取查询布局的特征
+            query_features = self._extract_global_features(query)
+            
+            # 计算与所有案例的相似度
+            similarities = []
+            for case in self.cases:
+                if 'layout' in case:
+                    case_features = self._extract_global_features(case['layout'])
+                    similarity = self._compute_similarity(query_features, case_features)
+                    if similarity >= similarity_threshold:
+                        similarities.append({
+                            'case': case['layout'],
+                            'similarity': similarity
+                        })
+            
+            # 按相似度排序
+            similarities.sort(key=lambda x: x['similarity'], reverse=True)
+            
+            # 返回top_k个最相似的案例
+            return [item['case'] for item in similarities[:top_k]]
+            
+        except Exception as e:
+            logger.error(f"获取相似案例失败: {str(e)}")
+            return []
         
     def hierarchical_decomposition(self, design_info: Dict) -> Dict:
         """对设计进行层次化分解
@@ -879,9 +884,40 @@ class KnowledgeBase:
         # TODO: 实现层次级别计算
         return 1
 
-    def query(self, query_params):
-        """查询知识库数据"""
-        return self.cases
+    def query(self, query_params: Dict) -> List[Dict]:
+        """查询知识库
+        
+        Args:
+            query_params: 查询参数
+            
+        Returns:
+            List[Dict]: 查询结果列表
+        """
+        try:
+            results = []
+            
+            # 遍历所有案例
+            for case in self.cases:
+                layout = case.get('layout', {})
+                match = True
+                
+                # 检查每个查询条件
+                for key, value in query_params.items():
+                    if key not in layout:
+                        match = False
+                        break
+                    if layout[key] != value:
+                        match = False
+                        break
+                        
+                if match:
+                    results.append(layout)
+                    
+            return results
+            
+        except Exception as e:
+            logger.error(f"查询知识库失败: {str(e)}")
+            return []
 
     def save(self, path: str):
         """保存知识库

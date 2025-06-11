@@ -23,6 +23,11 @@ class LayoutConfig:
     max_density: float = 0.8
     num_grid_cells: int = 20
     num_routing_layers: int = 3
+    max_iterations: int = 100
+    population_size: int = 50
+    mutation_rate: float = 0.1
+    crossover_rate: float = 0.8
+    target_satisfaction: float = 95.0
 
 class LayoutGenerator(nn.Module):
     """布局生成器类，负责生成满足约束的布局"""

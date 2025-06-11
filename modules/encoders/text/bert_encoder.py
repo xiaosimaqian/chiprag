@@ -4,6 +4,12 @@ from transformers import BertModel, BertTokenizer
 import logging
 from typing import Dict, Any, List, Union
 import gc
+import os
+import ssl
+import certifi
+import requests
+import json
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -21,25 +27,67 @@ class BertTextEncoder(nn.Module):
         self.model_name = config.get('model_name', 'bert-base-uncased')
         self.max_length = config.get('max_length', 512)
         self.batch_size = config.get('batch_size', 32)
+        self.model_path = config.get('model_path', 'models/bert')
+        self.ollama_url = config.get('ollama_url', 'http://localhost:11434')
+        self.use_ollama = config.get('use_ollama', False)
         
         # 检查CUDA是否可用
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         logger.info(f"使用设备: {self.device}")
         
-        # 加载预训练模型和分词器
+        # 设置SSL验证
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
+        
+        if self.use_ollama:
+            self._init_ollama()
+        else:
+            self._init_local_model()
+            
+    def _init_ollama(self):
+        """初始化Ollama模型"""
         try:
-            self.tokenizer = BertTokenizer.from_pretrained(self.model_name)
-            self.model = BertModel.from_pretrained(self.model_name)
-            self.model = self.model.to(self.device)
-            self.model.eval()
-            logger.info(f"成功加载BERT模型: {self.model_name}")
+            # 检查Ollama服务是否可用
+            response = requests.get(f"{self.ollama_url}/api/tags")
+            if response.status_code != 200:
+                raise ConnectionError("无法连接到Ollama服务")
+                
+            # 获取模型信息
+            self.model_name = self.config.get('ollama_model', 'llama2')
+            logger.info(f"使用Ollama模型: {self.model_name}")
+            
         except Exception as e:
-            logger.error(f"加载BERT模型失败: {str(e)}")
+            logger.error(f"初始化Ollama失败: {str(e)}")
             raise
             
-        # 冻结BERT参数
-        for param in self.model.parameters():
-            param.requires_grad = False
+    def _init_local_model(self):
+        """初始化本地模型"""
+        try:
+            model_path = Path(self.model_path)
+            if not model_path.exists():
+                raise FileNotFoundError(f"模型路径不存在: {self.model_path}")
+                
+            # 加载模型配置
+            config_path = model_path / 'config.json'
+            if not config_path.exists():
+                raise FileNotFoundError(f"模型配置文件不存在: {config_path}")
+                
+            with open(config_path) as f:
+                model_config = json.load(f)
+                
+            # 加载模型权重
+            weights_path = model_path / 'pytorch_model.bin'
+            if not weights_path.exists():
+                raise FileNotFoundError(f"模型权重文件不存在: {weights_path}")
+                
+            # 加载模型
+            self.model = torch.load(weights_path, map_location=self.device)
+            self.model.eval()
+            logger.info(f"成功加载本地模型: {self.model_path}")
+            
+        except Exception as e:
+            logger.error(f"加载本地模型失败: {str(e)}")
+            raise
             
     def _validate_text(self, text: str) -> None:
         """验证输入文本
@@ -149,16 +197,90 @@ class BertTextEncoder(nn.Module):
         return self.forward([text])[0]
         
     def encode(self, text: str) -> torch.Tensor:
-        """
-        encode_text的别名方法
+        """编码文本
         
         Args:
             text: 输入文本
             
         Returns:
-            文本编码向量
+            torch.Tensor: 文本编码向量
         """
-        return self.encode_text(text)
+        try:
+            if self.use_ollama:
+                return self._encode_with_ollama(text)
+            else:
+                return self._encode_with_local_model(text)
+                
+        except Exception as e:
+            logger.error(f"文本编码失败: {str(e)}")
+            raise
+            
+    def _encode_with_ollama(self, text: str) -> torch.Tensor:
+        """使用Ollama进行编码
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            torch.Tensor: 文本编码向量
+        """
+        try:
+            # 调用Ollama API
+            response = requests.post(
+                f"{self.ollama_url}/api/embeddings",
+                json={
+                    "model": self.model_name,
+                    "prompt": text
+                }
+            )
+            
+            if response.status_code != 200:
+                raise RuntimeError(f"Ollama API调用失败: {response.text}")
+                
+            # 解析响应
+            result = response.json()
+            embedding = torch.tensor(result['embedding'], device=self.device)
+            
+            return embedding
+            
+        except Exception as e:
+            logger.error(f"Ollama编码失败: {str(e)}")
+            raise
+            
+    def _encode_with_local_model(self, text: str) -> torch.Tensor:
+        """使用本地模型进行编码
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            torch.Tensor: 文本编码向量
+        """
+        try:
+            # 预处理文本
+            inputs = self._preprocess_text(text)
+            
+            # 编码
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                return outputs.last_hidden_state.mean(dim=1)
+                
+        except Exception as e:
+            logger.error(f"本地模型编码失败: {str(e)}")
+            raise
+            
+    def _preprocess_text(self, text: str) -> Dict[str, torch.Tensor]:
+        """预处理文本
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            Dict[str, torch.Tensor]: 预处理后的输入
+        """
+        # 实现文本预处理逻辑
+        # 这里需要根据具体使用的模型来实现
+        pass
         
     def encode_texts(self, texts: List[str]) -> torch.Tensor:
         """
@@ -173,44 +295,46 @@ class BertTextEncoder(nn.Module):
         return self.forward(texts)
         
     def compute_similarity(self, text1: str, text2: str) -> float:
-        """
-        计算两个文本的相似度
+        """计算两段文本的相似度
         
         Args:
-            text1: 第一个文本
-            text2: 第二个文本
+            text1: 第一段文本
+            text2: 第二段文本
             
         Returns:
-            相似度分数
+            float: 相似度分数
         """
-        # 编码文本
-        emb1 = self.encode_text(text1)
-        emb2 = self.encode_text(text2)
-        
-        # 计算余弦相似度
-        similarity = torch.nn.functional.cosine_similarity(emb1, emb2, dim=0)
-        
-        # 清理内存
-        del emb1, emb2
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        try:
+            # 编码文本
+            encoding1 = self.encode(text1)
+            encoding2 = self.encode(text2)
             
-        return similarity.item()
+            # 计算余弦相似度
+            similarity = torch.nn.functional.cosine_similarity(
+                encoding1,
+                encoding2
+            )
+            
+            return similarity.item()
+            
+        except Exception as e:
+            logger.error(f"计算文本相似度失败: {str(e)}")
+            raise
         
     def save_model(self, path: str):
-        """
-        保存模型
+        """保存模型
         
         Args:
             path: 保存路径
         """
-        torch.save({
-            'model_state_dict': self.model.state_dict(),
-            'tokenizer': self.tokenizer,
-            'max_length': self.max_length,
-            'batch_size': self.batch_size
-        }, path)
-        logger.info(f"模型已保存到: {path}")
+        try:
+            if not self.use_ollama:
+                torch.save(self.model, path)
+                logger.info(f"模型已保存到: {path}")
+                
+        except Exception as e:
+            logger.error(f"保存模型失败: {str(e)}")
+            raise
         
     @classmethod
     def load_model(cls, path: str) -> 'BertTextEncoder':

@@ -1,4 +1,4 @@
- import os
+import os
 import logging
 from typing import Dict, Any, List, Tuple
 from .verilog_parser import VerilogParser
