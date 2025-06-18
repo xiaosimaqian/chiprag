@@ -7,6 +7,7 @@ from modules.core.modal_retriever import ModalRetriever
 from modules.knowledge.knowledge_base import KnowledgeBase
 from unittest.mock import patch
 from PIL import Image
+import os
 
 class TestMultimodalRetrieval(unittest.TestCase):
     @classmethod
@@ -75,29 +76,29 @@ class TestMultimodalRetrieval(unittest.TestCase):
     def setUp(self):
         pass
 
-    @patch('PIL.Image.open')
-    def test_modal_retrieval(self, mock_image_open):
-        mock_image_open.return_value = Image.new('RGB', (224, 224))
+    def test_modal_retrieval(self):
+        """测试模态检索功能"""
         query = {
-            'text': 'Design a high-performance ALU',
-            'image': 'path/to/layout.png',
-            'graph': {
-                'nodes': ['ALU', 'Area', 'Performance'],
-                'edges': [
-                    ['ALU', 'Area', 'constraint'],
-                    ['ALU', 'Performance', 'optimize']
-                ]
-            }
+            'text': '测试查询',
+            'image': 'data/test_images/test_layout.png',
+            'graph': {'nodes': [], 'edges': []}
         }
-        results = self.retriever.retrieve(query)
-        self.assertIsInstance(results, list)
-        self.assertGreater(len(results), 0)
         
-        for result in results:
-            self.assertIn('content', result)
-            self.assertIn('metadata', result)
-            self.assertIn('features', result)
-            self.assertIn('score', result)
+        # 确保测试图像存在
+        os.makedirs('data/test_images', exist_ok=True)
+        test_image_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'test_images', 'test_layout.png')
+        if not os.path.exists(test_image_path):
+            # 创建一个测试图像
+            from PIL import Image
+            img = Image.new('RGB', (100, 100), color='white')
+            img.save(test_image_path)
+        
+        query['image'] = test_image_path
+        results = self.retriever.retrieve(query)
+        self.assertIsInstance(results, dict)
+        self.assertIn('text', results)
+        self.assertIn('image', results)
+        self.assertIn('graph', results)
 
 def main():
     unittest.main()

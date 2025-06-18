@@ -25,45 +25,46 @@ import psutil
 import gc
 from pathlib import Path
 import PyPDF2
+import torch
+from .chip_retriever import ChipRetriever
 
 logger = logging.getLogger(__name__)
 
 class RAGSystem:
-    """RAG系统"""
+    """RAG系统核心类"""
     
-    def __init__(self, 
-                 knowledge_base: KnowledgeBase,
-                 llm_manager: LLMManager,
-                 embedding_manager: EmbeddingManager,
-                 layout_generator: LayoutGenerator,
-                 evaluator: MultiObjectiveEvaluator,
-                 config: Optional[Dict] = None):  # 添加config参数
+    def __init__(self, config: Dict[str, Any]):
         """初始化RAG系统
         
         Args:
-            knowledge_base: 知识库
-            llm_manager: LLM管理器
-            embedding_manager: 嵌入管理器
-            layout_generator: 布局生成器
-            evaluator: 评估器
             config: 配置字典
         """
+        self.config = config
+        self.logger = logging.getLogger(__name__)
+        
         # 初始化组件
-        self.knowledge_base = knowledge_base
-        self.llm_manager = llm_manager
-        self.embedding_manager = embedding_manager
-        self.layout_generator = layout_generator
-        self.evaluator = evaluator
-        self.config = config or {}  # 添加config属性
+        self._init_components()
         
-        # 设置内存监控
-        self.memory_threshold = 0.8  # 80%内存使用率阈值
-        self.last_memory_check = time.time()
-        self.memory_check_interval = 60  # 每60秒检查一次内存
+    def _init_components(self):
+        """初始化系统组件"""
+        try:
+            # 初始化知识库
+            self.knowledge_base = KnowledgeBase(self.config.get('knowledge_base', {}))
+            
+            # 初始化检索器
+            self.retriever = ChipRetriever(self.config.get('retriever', {}))
+            
+            # 初始化LLM管理器
+            self.llm_manager = LLMManager(self.config.get('llm', {}))
         
-        self.pdf_cache = {}  # 用于缓存PDF处理状态
+            # 初始化评估器
+            self.evaluator = MultiObjectiveEvaluator(self.config.get('evaluation', {}))
         
-        logger.info("RAG系统初始化完成")
+            self.logger.info("RAG系统组件初始化完成")
+            
+        except Exception as e:
+            self.logger.error(f"初始化组件失败: {str(e)}")
+            raise
     
     def generate_layout(self, design_info: Dict, hierarchy_info: Dict, knowledge_base: Dict) -> Dict:
         """生成布局
@@ -543,96 +544,164 @@ class RAGSystem:
         
         return route
 
-    def retrieve_and_enhance(self, query: Dict, hierarchy_info: Dict) -> Dict[str, Any]:
+    def retrieve_knowledge(self, hierarchy: Dict) -> Dict:
+        """检索知识
+        
+        Args:
+            hierarchy: 层次化分解结果
+            
+        Returns:
+            Dict: 检索结果
+        """
+        try:
+            # 1. 从知识库检索相似案例
+            similar_cases = self.knowledge_base.retrieve(hierarchy)
+            
+            # 2. 提取约束和优化指南
+            constraints = self._extract_constraints(similar_cases)
+            optimization_guidelines = self._extract_optimization_guidelines(similar_cases)
+            
+            # 3. 使用LLM增强知识
+            enhanced_knowledge = self.llm_manager.enhance_knowledge(
+                similar_cases,
+                constraints,
+                optimization_guidelines
+            )
+            
+            return {
+                'similar_cases': similar_cases,
+                'constraints': constraints,
+                'optimization_guidelines': optimization_guidelines,
+                'enhanced_knowledge': enhanced_knowledge
+            }
+            
+        except Exception as e:
+            logger.error(f"知识检索失败: {str(e)}")
+            return {}
+            
+    def retrieve_and_enhance(self, query: str, hierarchy: Dict) -> Dict:
         """检索并增强知识
         
         Args:
-            query: 查询信息
-            hierarchy_info: 层次化信息
+            query: 查询文本
+            hierarchy: 层次化分解结果
             
         Returns:
-            Dict[str, Any]: 增强后的知识
+            Dict: 增强后的知识
         """
         try:
-            # 1. 检索相似案例
-            similar_cases = self.knowledge_base.get_similar_cases(
-                query,
-                top_k=5,
-                level='global'
+            # 1. 检索知识
+            retrieval_results = self.retrieve_knowledge(hierarchy)
+            
+            # 2. 使用LLM增强知识
+            enhanced_knowledge = self.llm_manager.enhance_knowledge(
+                retrieval_results['similar_cases'],
+                retrieval_results['constraints'],
+                retrieval_results['optimization_guidelines']
             )
-            logger.info(f"找到 {len(similar_cases)} 个相似案例")
             
-            # 2. 提取约束
-            constraints = self._extract_constraints(similar_cases)
-            logger.info(f"提取出 {len(constraints)} 个约束")
+            # 3. 计算拥塞度
+            congestion = self._calculate_congestion(enhanced_knowledge)
             
-            # 3. 提取优化指南
-            optimization_guidelines = self._extract_optimization_guidelines(similar_cases)
-            logger.info(f"提取出 {len(optimization_guidelines)} 个优化指南")
-            
-            # 4. 使用LLM分析和增强知识
-            enhanced_knowledge = {
-                'constraints': constraints,
-                'optimization_guidelines': optimization_guidelines,
-                'similar_cases': similar_cases
+            return {
+                'retrieval_results': retrieval_results,
+                'enhanced_knowledge': enhanced_knowledge,
+                'congestion': congestion
             }
-            
-            if self.llm_manager:
-                # 4.1 分析约束
-                constraint_analysis = self.llm_manager.analyze_constraints(constraints)
-                enhanced_knowledge['constraint_analysis'] = constraint_analysis
-                
-                # 4.2 分析优化指南
-                guideline_analysis = self.llm_manager.analyze_optimization_guidelines(optimization_guidelines)
-                enhanced_knowledge['guideline_analysis'] = guideline_analysis
-                
-                # 4.3 生成综合建议
-                suggestions = self.llm_manager.generate_suggestions(
-                    enhanced_knowledge,
-                    hierarchy_info
-                )
-                enhanced_knowledge['suggestions'] = suggestions
-            
-            return enhanced_knowledge
             
         except Exception as e:
             logger.error(f"知识检索和增强失败: {str(e)}")
-            return {
-                'constraints': [],
-                'optimization_guidelines': [],
-                'similar_cases': [],
-                'error': str(e)
-            }
+            return {}
         
-    def _extract_constraints(self, cases: List[Dict]) -> List[Dict]:
-        """提取约束信息
+    def _extract_constraints(self, similar_cases: List[Dict]) -> Dict:
+        """提取约束
         
         Args:
-            cases: 案例列表
+            similar_cases: 相似案例列表
             
         Returns:
-            约束列表
+            Dict: 约束信息
         """
-        constraints = []
-        for case in cases:
-            if 'constraints' in case:
-                constraints.extend(case['constraints'])
-        return constraints
+        try:
+            constraints = {
+                'area': [],
+                'power': [],
+                'timing': []
+            }
+            
+            for case in similar_cases:
+                if 'constraints' in case:
+                    case_constraints = case['constraints']
+                    for key in constraints:
+                        if key in case_constraints:
+                            constraints[key].append(case_constraints[key])
+                            
+            return constraints
         
-    def _extract_optimization_guidelines(self, cases: List[Dict]) -> List[Dict]:
+        except Exception as e:
+            logger.error(f"提取约束失败: {str(e)}")
+            return {}
+            
+    def _extract_optimization_guidelines(self, similar_cases: List[Dict]) -> List[str]:
         """提取优化指南
         
         Args:
-            cases: 案例列表
+            similar_cases: 相似案例列表
             
         Returns:
-            优化指南列表
+            List[str]: 优化指南列表
         """
-        guidelines = []
-        for case in cases:
-            if 'optimization_guidelines' in case:
-                guidelines.extend(case['optimization_guidelines'])
-        return guidelines
+        try:
+            guidelines = []
+            
+            for case in similar_cases:
+                if 'optimization_guidelines' in case:
+                    guidelines.extend(case['optimization_guidelines'])
+                    
+            return list(set(guidelines))  # 去重
+            
+        except Exception as e:
+            logger.error(f"提取优化指南失败: {str(e)}")
+            return []
+            
+    def _calculate_congestion(self, knowledge: Dict) -> float:
+        """计算拥塞度
+        
+        Args:
+            knowledge: 知识数据
+            
+        Returns:
+            float: 拥塞度
+        """
+        try:
+            # 1. 获取布局信息
+            layout = knowledge.get('layout', {})
+            if not layout:
+                return 0.0
+                
+            # 2. 创建网格
+            grid_size = 10  # 10x10网格
+            grid = np.zeros((grid_size, grid_size))
+            
+            # 3. 统计每个网格中的组件数量
+            placement = layout.get('placement', [])
+            for component in placement:
+                x, y = component.get('position', [0, 0])  # 组件位置
+                grid_x = int(x * grid_size)
+                grid_y = int(y * grid_size)
+                
+                if 0 <= grid_x < grid_size and 0 <= grid_y < grid_size:
+                    grid[grid_x, grid_y] += 1
+                    
+            # 4. 计算拥塞度
+            max_congestion = np.max(grid)
+            avg_congestion = np.mean(grid)
+            
+            return max_congestion / (avg_congestion + 1e-6)
+            
+        except Exception as e:
+            logger.error(f"计算拥塞度失败: {str(e)}")
+            return 0.0
 
     def add_pdf_knowledge(self, pdf_path: str) -> bool:
         """添加PDF知识到知识库

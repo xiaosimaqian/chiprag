@@ -1,8 +1,10 @@
 import json, csv, os
+import datetime
 from modules.evaluation.experiment_evaluator import evaluate_layout
 
 cases = ['alu', 'fifo', 'uart']
 results = []
+timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
 for case in cases:
     base = f'data/test_cases/{case}'
     # 合成netlist和constraints
@@ -30,17 +32,19 @@ for case in cases:
 
 # 保存CSV
 os.makedirs('results', exist_ok=True)
-with open('results/experiment_summary.csv', 'w', newline='') as f:
+csv_path = f'results/experiment_summary_{timestamp}.csv'
+with open(csv_path, 'w', newline='') as f:
     writer = csv.DictWriter(f, fieldnames=results[0].keys())
     writer.writeheader()
     writer.writerows(results)
-print("实验结果已保存到 results/experiment_summary.csv")
+print(f"实验结果已保存到 {csv_path}")
 
 def to_latex_table(results):
     header = ' & '.join(results[0].keys()) + ' \\ \\hline'
     rows = [' & '.join(str(v) for v in r.values()) + ' \\' for r in results]
     return '\\begin{tabular}{|' + 'c|'*len(results[0]) + '}' + '\n\\hline\n' + header + '\n' + '\n'.join(rows) + '\n\\hline\n\\end{tabular}'
 
-with open('results/experiment_summary.tex', 'w') as f:
+tex_path = f'results/experiment_summary_{timestamp}.tex'
+with open(tex_path, 'w') as f:
     f.write(to_latex_table(results))
-print("LaTeX表格已保存到 results/experiment_summary.tex") 
+print(f"LaTeX表格已保存到 {tex_path}") 

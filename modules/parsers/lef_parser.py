@@ -5,73 +5,202 @@ from typing import Dict, Any, List, Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
+def split_by_token_limit(content: str, max_tokens: int = 1000) -> List[str]:
+    """将LEF文件内容按token数量分割
+    
+    Args:
+        content: LEF文件内容
+        max_tokens: 每个分片的最大token数量
+        
+    Returns:
+        分割后的内容列表
+    """
+    # 按分号分割语句
+    statements = re.split(r';\s*', content)
+    chunks = []
+    current_chunk = []
+    current_tokens = 0
+    
+    for stmt in statements:
+        # 简单估算token数量（按空格分割）
+        stmt_tokens = len(stmt.split())
+        
+        if current_tokens + stmt_tokens > max_tokens and current_chunk:
+            chunks.append(';\n'.join(current_chunk) + ';')
+            current_chunk = []
+            current_tokens = 0
+            
+        current_chunk.append(stmt)
+        current_tokens += stmt_tokens
+        
+    if current_chunk:
+        chunks.append(';\n'.join(current_chunk) + ';')
+        
+    return chunks
+
+def parse_large_lef_file(tech_lef_file: str, cells_lef_file: str = None, max_tokens: int = 1000) -> Dict[str, Any]:
+    """解析大型LEF文件
+    
+    Args:
+        tech_lef_file: 工艺LEF文件路径
+        cells_lef_file: 单元库LEF文件路径（可选）
+        max_tokens: 每个分片的最大token数量
+        
+    Returns:
+        解析后的数据字典
+    """
+    logger.info(f"开始解析大型LEF文件: {tech_lef_file}")
+    
+    try:
+        content = ""
+        with open(tech_lef_file, 'r') as f:
+            content += f.read() + "\n"
+            
+        if cells_lef_file:
+            logger.info(f"开始解析单元库LEF文件: {cells_lef_file}")
+            with open(cells_lef_file, 'r') as f:
+                content += f.read() + "\n"
+                
+        # 分割文件内容，保持LEF语句的完整性
+        statements = []
+        current_statement = []
+        current_tokens = 0
+        
+        for line in content.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+                
+            # 计算当前行的token数量
+            line_tokens = len(line.split())
+            
+            # 如果当前行包含分号，说明是一个完整的语句
+            if ';' in line:
+                parts = line.split(';')
+                for i, part in enumerate(parts[:-1]):
+                    if current_statement:
+                        current_statement.append(part)
+                        statements.append(' '.join(current_statement) + ';')
+                        current_statement = []
+                        current_tokens = 0
+                    else:
+                        statements.append(part + ';')
+                if parts[-1].strip():
+                    current_statement = [parts[-1]]
+                    current_tokens = line_tokens
+            else:
+                if current_tokens + line_tokens > max_tokens and current_statement:
+                    statements.append(' '.join(current_statement))
+                    current_statement = []
+                    current_tokens = 0
+                current_statement.append(line)
+                current_tokens += line_tokens
+                
+        if current_statement:
+            statements.append(' '.join(current_statement))
+            
+        logger.info(f"LEF文件已分割为 {len(statements)} 个语句")
+        
+        # 解析每个语句
+        parser = LEFParser()
+        result = {}
+        
+        for i, statement in enumerate(statements):
+            logger.info(f"正在解析第 {i+1}/{len(statements)} 个语句")
+            try:
+                chunk_data = parser.parse_lef(statement)
+                # 合并结果
+                for key, value in chunk_data.items():
+                    if key not in result:
+                        result[key] = value
+                    elif isinstance(value, dict):
+                        result[key].update(value)
+                    elif isinstance(value, list):
+                        result[key].extend(value)
+            except Exception as e:
+                logger.error(f"解析第 {i+1} 个语句时出错: {str(e)}")
+                continue
+                
+        logger.info("大型LEF文件解析完成")
+        return result
+        
+    except FileNotFoundError as e:
+        logger.error(f"LEF文件不存在: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"解析LEF文件时出错: {str(e)}")
+        raise
+
+# 为向后兼容性提供别名
+parse_lef_file = parse_large_lef_file
+
 class LEFParser:
     def __init__(self):
         self.current_section = None
-        self.data = {}
-        self.tech_file = None
-        self.cells_file = None
+        self.data = {
+            'VERSION': None,
+            'DESIGN': None,
+            'UNITS': {},
+            'MACROS': {},
+            'LAYERS': {},
+            'VIAS': {},
+            'SITES': {},
+            'SPACING': {}
+        }
         
-    def parse_lef(self, tech_lef_file: str, cells_lef_file: str = None) -> Dict[str, Any]:
-        """解析LEF文件
+    def parse_lef(self, content: str) -> Dict[str, Any]:
+        """解析LEF文件内容
         
         Args:
-            tech_lef_file: 工艺LEF文件路径
-            cells_lef_file: 单元库LEF文件路径（可选）
+            content: LEF文件内容
             
         Returns:
             解析后的数据字典
-            
-        Raises:
-            FileNotFoundError: 文件不存在
-            ValueError: 文件格式错误
         """
-        self.tech_file = os.path.abspath(tech_lef_file)
-        logger.info(f"开始解析工艺LEF文件: {self.tech_file}")
+        logger.info("开始解析LEF文件内容")
         
         try:
-            content = ""
-            with open(self.tech_file, 'r') as f:
-                content += f.read() + "\n"
-                
-            if cells_lef_file:
-                self.cells_file = os.path.abspath(cells_lef_file)
-                logger.info(f"开始解析单元库LEF文件: {self.cells_file}")
-                with open(self.cells_file, 'r') as f:
-                    content += f.read() + "\n"
+            # 解析版本和设计名称（仅在第一次解析时检查）
+            if not self.data['VERSION']:
+                version_match = re.search(r'VERSION\s+(\S+)', content)
+                if version_match:
+                    self.data['VERSION'] = version_match.group(1)
+                    logger.info(f"解析到版本: {self.data['VERSION']}")
                     
-            # 解析版本和设计名称
-            version_match = re.search(r'VERSION\s+(\S+)', content)
-            design_match = re.search(r'DESIGN\s+(\S+)', content)
-            
-            if not version_match or not design_match:
-                raise ValueError("LEF文件缺少VERSION或DESIGN声明")
-                
-            self.data['VERSION'] = version_match.group(1)
-            self.data['DESIGN'] = design_match.group(1)
-            self.data['FILES'] = {
-                'tech': self.tech_file,
-                'cells': self.cells_file
-            }
+            if not self.data['DESIGN']:
+                design_match = re.search(r'DESIGN\s+(\S+)', content)
+                if design_match:
+                    self.data['DESIGN'] = design_match.group(1)
+                    logger.info(f"解析到设计名称: {self.data['DESIGN']}")
             
             # 解析各个部分
+            logger.info("开始解析UNITS部分")
             self._parse_units(content)
+            
+            logger.info("开始解析MACROS部分")
             self._parse_macros(content)
+            
+            logger.info("开始解析LAYERS部分")
             self._parse_layers(content)
+            
+            logger.info("开始解析VIAS部分")
             self._parse_vias(content)
+            
+            logger.info("开始解析SITES部分")
             self._parse_sites(content)
+            
+            logger.info("开始解析SPACING部分")
             self._parse_spacing(content)
+            
+            logger.info("开始解析MINFEATURE部分")
             self._parse_minfeature(content)
             
             logger.info("LEF文件解析完成")
             return self.data
             
-        except FileNotFoundError as e:
-            logger.error(f"LEF文件不存在: {str(e)}")
-            raise
         except Exception as e:
             logger.error(f"解析LEF文件时出错: {str(e)}")
-            raise
+            return None
             
     def _parse_units(self, content: str):
         """解析UNITS部分"""
@@ -91,7 +220,6 @@ class LEFParser:
             
     def _parse_macros(self, content: str):
         """解析MACROS部分"""
-        self.data['MACROS'] = {}
         macro_sections = re.finditer(r'MACRO\s+(\S+).*?END\s+\1', content, re.DOTALL)
         
         for section in macro_sections:
@@ -187,7 +315,6 @@ class LEFParser:
                 
     def _parse_layers(self, content: str):
         """解析LAYERS部分"""
-        self.data['LAYERS'] = {}
         layer_sections = re.finditer(r'LAYER\s+(\S+).*?END\s+\1', content, re.DOTALL)
         
         for section in layer_sections:
@@ -234,7 +361,6 @@ class LEFParser:
                 
     def _parse_vias(self, content: str):
         """解析VIAS部分"""
-        self.data['VIAS'] = {}
         via_sections = re.finditer(r'VIA\s+(\S+).*?END\s+\1', content, re.DOTALL)
         
         for section in via_sections:
@@ -282,7 +408,6 @@ class LEFParser:
                 
     def _parse_sites(self, content: str):
         """解析SITES部分"""
-        self.data['SITES'] = {}
         site_sections = re.finditer(r'SITE\s+(\S+).*?END\s+\1', content, re.DOTALL)
         
         for section in site_sections:
@@ -320,7 +445,6 @@ class LEFParser:
                 
     def _parse_spacing(self, content: str):
         """解析SPACING部分"""
-        self.data['SPACING'] = {}
         spacing_sections = re.finditer(r'SPACING\s+(\S+).*?END\s+\1', content, re.DOTALL)
         
         for section in spacing_sections:

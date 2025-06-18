@@ -19,16 +19,20 @@ class TestRetrieval(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """设置测试环境"""
+        # 创建测试目录
+        test_dir = Path('/tmp/chiprag_test')
+        test_dir.mkdir(parents=True, exist_ok=True)
+        
         cls.config = {
             'knowledge_base': {
-                'path': '/tmp/chiprag_test',
+                'path': str(test_dir),
                 'format': 'json',
-                'text_path': '/tmp/chiprag_test/text',
-                'image_path': '/tmp/chiprag_test/images',
-                'structured_data_path': '/tmp/chiprag_test/structured',
-                'graph_path': '/tmp/chiprag_test/graph',
-                'layout_experience_path': '/tmp/chiprag_test/layout',
-                'cache_dir': '/tmp/chiprag_test/cache'
+                'text_path': str(test_dir / 'text'),
+                'image_path': str(test_dir / 'images'),
+                'structured_data_path': str(test_dir / 'structured'),
+                'graph_path': str(test_dir / 'graph'),
+                'layout_experience_path': str(test_dir / 'layout'),
+                'cache_dir': str(test_dir / 'cache')
             },
             'hierarchy_config': {
                 'max_depth': 3,
@@ -92,7 +96,12 @@ class TestRetrieval(unittest.TestCase):
                         {'from': 'comp1', 'to': 'comp2'}
                     ]
                 }
-            ]
+            ],
+            'hierarchy': {
+                'levels': ['top', 'module'],
+                'modules': ['mem'],
+                'max_depth': 2
+            }
         }
         optimization_result = {
             'wirelength': 500,
@@ -100,10 +109,19 @@ class TestRetrieval(unittest.TestCase):
             'timing': 5.0,
             'score': 0.8
         }
+        
+        # 添加测试数据并保存
         cls.knowledge_base.add_case(test_data, optimization_result)
+        cls.knowledge_base._save_data()
         
         # 初始化检索器
         cls.retriever = MultiGranularityRetrieval(cls.config)
+        
+    @classmethod
+    def tearDownClass(cls):
+        """清理测试环境"""
+        import shutil
+        shutil.rmtree('/tmp/chiprag_test', ignore_errors=True)
         
     def test_multi_granularity_initialization(self):
         """测试多粒度检索器初始化"""

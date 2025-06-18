@@ -11,6 +11,7 @@ import numpy as np
 import torch
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
 import requests
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -60,22 +61,54 @@ class LLMManager:
             raise
         
     def _call_ollama(self, prompt: str) -> str:
-        """调用Ollama API"""
-        try:
-            response = requests.post(
-                f"{self.base_url}/api/generate",
-                json={
-                    "model": self.model,
-                    "prompt": prompt,
-                    "temperature": self.temperature,
-                    "max_tokens": self.max_tokens
-                }
-            )
-            response.raise_for_status()
-            return response.json()['response']
-        except Exception as e:
-            logger.error(f"Error calling Ollama API: {e}")
-            return ""
+        """调用Ollama API
+        
+        Args:
+            prompt: 提示文本
+            
+        Returns:
+            str: API响应
+        """
+        max_retries = 3
+        retry_delay = 1  # 秒
+        
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    f"{self.base_url}/api/generate",
+                    json={
+                        "model": self.model,
+                        "prompt": prompt,
+                        "temperature": self.temperature,
+                        "max_tokens": self.max_tokens
+                    },
+                    timeout=30  # 设置超时时间
+                )
+                response.raise_for_status()
+                
+                # 解析响应
+                try:
+                    result = response.json()
+                    if isinstance(result, dict) and 'response' in result:
+                        return result['response']
+                    else:
+                        logger.warning(f"意外的响应格式: {result}")
+                        return ""
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON解析错误: {e}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                    return ""
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Ollama API调用失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                return ""
+                
+        return ""
             
     def extract_features(self, query: str, context: Optional[Dict] = None) -> Dict:
         """特征提取"""
@@ -577,7 +610,30 @@ class LLMManager:
         return {}
 
     def compute_similarities(self, queries, candidates):
+        """计算查询和候选之间的相似度
+        
+        Args:
+            queries: 查询列表
+            candidates: 候选列表
+            
+        Returns:
+            List[float]: 相似度列表
         """
-        Mock方法：返回全0相似度列表
-        """
-        return [0.0 for _ in candidates] 
+        try:
+            # 编码查询和候选
+            query_encodings = self.encode_batch(queries)
+            candidate_encodings = self.encode_batch(candidates)
+            
+            # 计算余弦相似度
+            similarities = torch.nn.functional.cosine_similarity(
+                query_encodings.unsqueeze(1),
+                candidate_encodings.unsqueeze(0),
+                dim=2
+            )
+            
+            # 转换为列表
+            return similarities.tolist()
+            
+        except Exception as e:
+            logger.error(f"计算相似度失败: {str(e)}")
+            return [0.0 for _ in candidates] 

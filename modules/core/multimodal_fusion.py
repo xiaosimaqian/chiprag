@@ -2,6 +2,7 @@ import logging
 from typing import Dict, List, Any, Optional
 import numpy as np
 from sklearn.preprocessing import normalize
+from sklearn.decomposition import PCA
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,46 @@ class MultimodalFusion:
         if np.isnan(features).any():
             raise ValueError(f"{modality}特征包含NaN值")
             
+    def _transform_features(self, features: np.ndarray, target_dim: int) -> np.ndarray:
+        """转换特征维度
+        
+        Args:
+            features: 特征向量
+            target_dim: 目标维度
+            
+        Returns:
+            转换后的特征向量
+        """
+        if features.ndim == 1:
+            features = features.reshape(1, -1)
+            
+        # 如果特征维度大于目标维度，使用PCA降维
+        if features.shape[1] > target_dim:
+            # 确保样本数量足够
+            n_samples = features.shape[0]
+            n_components = min(target_dim, n_samples, features.shape[1])
+            if n_components > 0:
+                pca = PCA(n_components=n_components)
+                transformed = pca.fit_transform(features)
+                # 如果降维后的维度小于目标维度，进行零填充
+                if n_components < target_dim:
+                    padded = np.zeros((transformed.shape[0], target_dim))
+                    padded[:, :n_components] = transformed
+                    return padded.squeeze()
+                return transformed.squeeze()
+            else:
+                # 如果无法进行PCA，使用零填充
+                padded = np.zeros((features.shape[0], target_dim))
+                return padded.squeeze()
+            
+        # 如果特征维度小于目标维度，使用零填充
+        elif features.shape[1] < target_dim:
+            padded = np.zeros((features.shape[0], target_dim))
+            padded[:, :features.shape[1]] = features
+            return padded.squeeze()
+            
+        return features.squeeze()
+        
     def fuse(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """融合多模态数据
         
@@ -105,14 +146,15 @@ class MultimodalFusion:
             for _, features, _ in valid_modalities:
                 normalized_features.append(self._normalize_features(features))
                 
-            # 确保特征维度一致
-            feature_dims = [f.shape for f in normalized_features]
-            if len(set(feature_dims)) > 1:
-                raise ValueError(f"各模态特征维度不一致: {feature_dims}")
+            # 转换特征维度
+            target_dim = 512  # 使用统一的目标维度
+            transformed_features = []
+            for features in normalized_features:
+                transformed_features.append(self._transform_features(features, target_dim))
                 
             # 加权融合
-            fused_features = np.zeros_like(normalized_features[0])
-            for features, weight in zip(normalized_features, normalized_weights):
+            fused_features = np.zeros_like(transformed_features[0])
+            for features, weight in zip(transformed_features, normalized_weights):
                 fused_features += weight * features
                 
             # 合并元数据

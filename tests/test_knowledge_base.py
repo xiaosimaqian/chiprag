@@ -47,23 +47,49 @@ class TestKnowledgeBase(unittest.TestCase):
         # 初始化知识库
         cls.knowledge_base = KnowledgeBase(cls.config['knowledge_base'])
         
+        # 添加一条初始数据
+        test_data = {
+            'name': 'init_block',
+            'type': 'block',
+            'features': {
+                'area': 100,
+                'power': 0.5
+            },
+            'hierarchy': {
+                'levels': ['top', 'block'],
+                'modules': ['init_block'],
+                'max_depth': 2
+            },
+            'components': [
+                {
+                    'name': 'comp1',
+                    'type': 'module',
+                    'x': 0,
+                    'y': 0,
+                    'width': 10,
+                    'height': 10
+                }
+            ],
+            'nets': [
+                {
+                    'name': 'net1',
+                    'source': 'comp1',
+                    'target': 'comp2',
+                    'type': 'signal',
+                    'connections': [
+                        {'from': 'comp1', 'to': 'comp2'}
+                    ]
+                }
+            ]
+        }
+        cls.knowledge_base.add_case(test_data, {})
+        
     def test_knowledge_initialization(self):
         """测试知识库初始化"""
         self.assertIsNotNone(self.knowledge_base)
         self.assertTrue(hasattr(self.knowledge_base, 'load'))
         self.assertTrue(hasattr(self.knowledge_base, 'query'))
         self.assertTrue(hasattr(self.knowledge_base, 'update'))
-        
-    def test_knowledge_loading(self):
-        """测试知识加载"""
-        self.knowledge_base.load()
-        self.assertGreater(len(self.knowledge_base), 0)
-        
-    def test_knowledge_query(self):
-        """测试知识查询"""
-        query = {"type": "memory_block"}
-        results = self.knowledge_base.query(query)
-        self.assertIsInstance(results, list)
         
     def test_knowledge_update(self):
         """测试知识更新"""
@@ -107,11 +133,24 @@ class TestKnowledgeBase(unittest.TestCase):
         # 查询并验证
         results = self.knowledge_base.query({'type': 'block'})
         self.assertTrue(len(results) > 0)
-        self.assertTrue('name' in results[0])
-        self.assertEqual(results[0]["name"], "test_block")
-        self.assertTrue('hierarchy' in results[0])
-        self.assertTrue('levels' in results[0]['hierarchy'])
-        self.assertIn('block', results[0]['hierarchy']['levels'])
+        names = [r["name"] for r in results]
+        self.assertIn("test_block", names)
+        target = next((r for r in results if r["name"] == "test_block"), None)
+        self.assertIsNotNone(target)
+        self.assertTrue('hierarchy' in target)
+        self.assertTrue('levels' in target['hierarchy'])
+        self.assertIn('block', target['hierarchy']['levels'])
+        
+    def test_knowledge_loading(self):
+        """测试知识加载"""
+        self.knowledge_base.load()
+        self.assertGreater(len(self.knowledge_base), 0)
+        
+    def test_knowledge_query(self):
+        """测试知识查询"""
+        query = {"type": "memory_block"}
+        results = self.knowledge_base.query(query)
+        self.assertIsInstance(results, list)
 
 if __name__ == '__main__':
     unittest.main() 

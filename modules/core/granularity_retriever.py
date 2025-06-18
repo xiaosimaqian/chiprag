@@ -185,7 +185,11 @@ class MultiGranularityRetrieval:
         """
         try:
             # 获取相似案例
-            similar_cases = self.knowledge_base.get_similar_cases(query, top_k=top_k)
+            similar_cases = self.knowledge_base.get_similar_cases(
+                query,
+                top_k=top_k,
+                similarity_threshold=0.5
+            )
             
             # 根据当前粒度过滤结果
             if self.current_granularity:

@@ -28,19 +28,48 @@ class LayoutVisualizer:
             # 1. 创建图形
             fig, ax = plt.subplots(figsize=(12, 8))
             
-            # 2. 绘制组件
-            self._draw_components(ax, layout.get('placement', []))
+            # 2. 打印所有组件的坐标和尺寸，临时放宽过滤条件
+            die_area = layout.get('die_area', {'width': 1.0, 'height': 1.0})
+            if isinstance(die_area, dict):
+                die_width = die_area.get('width', 1.0)
+                die_height = die_area.get('height', 1.0)
+            elif isinstance(die_area, list) and len(die_area) == 4:
+                die_width = die_area[2] - die_area[0]
+                die_height = die_area[3] - die_area[1]
+            else:
+                die_width = die_height = 1.0
             
-            # 3. 绘制布线
-            self._draw_routing(ax, layout.get('routing', []))
+            components = layout.get('components', [])
+            logger.info(f"组件总数: {len(components)}")
+            if not components:
+                logger.warning("没有可视化的组件！")
+            for i, comp in enumerate(components):
+                x = comp.get('x', 0)
+                y = comp.get('y', 0)
+                width = comp.get('width', 0)
+                height = comp.get('height', 0)
+                logger.info(f"Comp{i}: x={x}, y={y}, w={width}, h={height}")
+                # 临时放宽过滤条件，全部画出来
+                # if x < 0 or y < 0 or x + width > die_width or y + height > die_height:
+                #     continue
+                rect = patches.Rectangle(
+                    (x, y),
+                    width,
+                    height,
+                    linewidth=1,
+                    edgecolor='black',
+                    facecolor=self.colors[i % len(self.colors)],
+                    alpha=0.6
+                )
+                ax.add_patch(rect)
             
-            # 4. 设置图形属性
-            self._set_plot_properties(ax)
+            # 3. 设置图形属性（传递layout参数）
+            self._set_plot_properties(ax, layout)
             
-            # 5. 添加图例和标题
-            self._add_legend_and_title(ax, layout)
+            # 4. 添加标题
+            ax.set_title('布局可视化', fontsize=14, pad=20)
             
-            # 6. 保存或显示图形
+            # 5. 保存或显示图形
             if save_path:
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
                 plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -117,23 +146,31 @@ class LayoutVisualizer:
                 zorder=3
             )
             
-    def _set_plot_properties(self, ax):
+    def _set_plot_properties(self, ax, layout):
         """设置图形属性
         
         Args:
             ax: matplotlib轴对象
+            layout: 布局信息
         """
-        # 设置坐标轴范围
-        ax.set_xlim(-1.2, 1.2)
-        ax.set_ylim(-1.2, 1.2)
-        
+        # 获取die区域
+        die_area = layout.get('die_area', {'width': 1.0, 'height': 1.0})
+        if isinstance(die_area, dict):
+            width = die_area.get('width', 1.0)
+            height = die_area.get('height', 1.0)
+            ax.set_xlim(0, width)
+            ax.set_ylim(0, height)
+        elif isinstance(die_area, list) and len(die_area) == 4:
+            ax.set_xlim(die_area[0], die_area[2])
+            ax.set_ylim(die_area[1], die_area[3])
+        else:
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
         # 设置网格
         ax.grid(True, linestyle='--', alpha=0.3)
-        
         # 设置坐标轴标签
         ax.set_xlabel('X')
         ax.set_ylabel('Y')
-        
         # 设置等比例
         ax.set_aspect('equal')
         

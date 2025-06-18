@@ -28,6 +28,45 @@ class LayoutQualityEvaluator:
         return metrics['overall_score']
         
     def calculate_metrics(self, layout: Dict[str, Any]) -> Dict[str, float]:
+        """计算布局质量指标
+        
+        Args:
+            layout: 布局数据
+            
+        Returns:
+            Dict[str, float]: 包含各项指标的字典
+        """
+        try:
+            # 计算线长
+            wirelength = self._calculate_wirelength(layout)
+            
+            # 计算拥塞度
+            congestion = self._calculate_congestion(layout)
+            
+            # 计算时序
+            timing = self._calculate_timing(layout)
+            
+            # 计算功耗
+            power = self._calculate_power(layout)
+            
+            # 计算总体得分
+            overall_score = self._calculate_overall_score(
+                wirelength=wirelength,
+                congestion=congestion,
+                timing=timing,
+                power=power
+            )
+            
+            return {
+                "wirelength": wirelength,
+                "congestion": congestion,
+                "timing": timing,
+                "power": power,
+                "overall_score": overall_score
+            }
+            
+        except Exception as e:
+            logger.error(f"计算指标失败: {str(e)}")
         return {
             "wirelength": 0.0,
             "congestion": 0.0,
@@ -35,6 +74,147 @@ class LayoutQualityEvaluator:
             "power": 0.0,
             "overall_score": 0.0
         }
+            
+    def _calculate_wirelength(self, layout: Dict[str, Any]) -> float:
+        """计算线长
+        
+        Args:
+            layout: 布局数据
+            
+        Returns:
+            float: 线长值
+        """
+        try:
+            total_length = 0.0
+            for net in layout.get('nets', []):
+                route = net.get('route', [])
+                for i in range(len(route) - 1):
+                    dx = route[i+1][0] - route[i][0]
+                    dy = route[i+1][1] - route[i][1]
+                    length = (dx*dx + dy*dy) ** 0.5
+                    total_length += length
+            return total_length
+        except Exception as e:
+            logger.error(f"计算线长失败: {str(e)}")
+            return 0.0
+            
+    def _calculate_congestion(self, layout: Dict[str, Any]) -> float:
+        """计算拥塞度
+        
+        Args:
+            layout: 布局数据
+            
+        Returns:
+            float: 拥塞度值
+        """
+        try:
+            # 创建网格
+            grid_size = 10
+            grid = np.zeros((grid_size, grid_size))
+            
+            # 统计每个网格中的组件数量
+            for component in layout.get('components', []):
+                position = component.get('position', {})
+                if isinstance(position, dict):
+                    x = position.get('x', 0)
+                    y = position.get('y', 0)
+                else:
+                    x, y = position if isinstance(position, (list, tuple)) else (0, 0)
+                    
+                # 将坐标映射到网格
+                grid_x = int(x * grid_size)
+                grid_y = int(y * grid_size)
+                
+                if 0 <= grid_x < grid_size and 0 <= grid_y < grid_size:
+                    grid[grid_x, grid_y] += 1
+                    
+            # 计算拥塞度
+            max_congestion = np.max(grid)
+            avg_congestion = np.mean(grid)
+            
+            return max_congestion / (avg_congestion + 1e-6)
+            
+        except Exception as e:
+            logger.error(f"计算拥塞度失败: {str(e)}")
+            return 0.0
+            
+    def _calculate_timing(self, layout: Dict[str, Any]) -> float:
+        """计算时序
+        
+        Args:
+            layout: 布局数据
+            
+        Returns:
+            float: 时序值
+        """
+        try:
+            max_delay = 0.0
+            for net in layout.get('nets', []):
+                route = net.get('route', [])
+                delay = 0.0
+                for i in range(len(route) - 1):
+                    dx = route[i+1][0] - route[i][0]
+                    dy = route[i+1][1] - route[i][1]
+                    length = (dx*dx + dy*dy) ** 0.5
+                    delay += length * net.get('weight', 1.0)
+                max_delay = max(max_delay, delay)
+            return max_delay
+        except Exception as e:
+            logger.error(f"计算时序失败: {str(e)}")
+            return 0.0
+            
+    def _calculate_power(self, layout: Dict[str, Any]) -> float:
+        """计算功耗
+        
+        Args:
+            layout: 布局数据
+            
+        Returns:
+            float: 功耗值
+        """
+        try:
+            total_power = 0.0
+            for component in layout.get('components', []):
+                total_power += component.get('power', 1.0)
+            return total_power
+        except Exception as e:
+            logger.error(f"计算功耗失败: {str(e)}")
+            return 0.0
+            
+    def _calculate_overall_score(self, **metrics) -> float:
+        """计算总体得分
+        
+        Args:
+            metrics: 各项指标值
+            
+        Returns:
+            float: 总体得分
+        """
+        try:
+            weights = self.config.get('weights', {
+                'wirelength': 0.3,
+                'congestion': 0.3,
+                'timing': 0.2,
+                'power': 0.2
+            })
+            
+            # 归一化各项指标
+            normalized_metrics = {}
+            for metric, value in metrics.items():
+                threshold = self.config.get('thresholds', {}).get(metric, 1.0)
+                normalized_metrics[metric] = min(1.0, threshold / (value + 1e-6))
+                
+            # 计算加权总分
+            overall_score = sum(
+                normalized_metrics[metric] * weights[metric]
+                for metric in weights
+            )
+            
+            return overall_score
+            
+        except Exception as e:
+            logger.error(f"计算总体得分失败: {str(e)}")
+            return 0.0
 
 class SceneAdaptiveRetrieval:
     def __init__(self, knowledge_base: Dict):

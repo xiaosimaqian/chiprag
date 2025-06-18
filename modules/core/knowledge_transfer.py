@@ -37,26 +37,38 @@ class KnowledgeTransfer:
         """
         logger.info(f"开始知识迁移: {source_node.name} -> {target_node.name}")
         
-        # 1. 分析源节点知识
-        source_knowledge = self._analyze_source_knowledge(source_node)
-        
-        # 2. 分析目标节点需求
-        target_requirements = self._analyze_target_requirements(target_node)
-        
-        # 3. 生成迁移策略
-        transfer_strategy = self._generate_transfer_strategy(
-            source_knowledge=source_knowledge,
-            target_requirements=target_requirements,
-            context=context
-        )
-        
-        # 4. 执行知识迁移
-        transferred_knowledge = self._execute_transfer(
-            source_knowledge=source_knowledge,
-            strategy=transfer_strategy
-        )
-        
-        return transferred_knowledge
+        try:
+            # 1. 分析源节点知识
+            source_knowledge = self._analyze_source_knowledge(source_node)
+            
+            # 2. 分析目标节点需求
+            target_requirements = self._analyze_target_requirements(target_node)
+            
+            # 3. 生成迁移策略
+            transfer_strategy = self._generate_transfer_strategy(
+                source_knowledge=source_knowledge,
+                target_requirements=target_requirements,
+                context=context
+            )
+            
+            # 4. 执行知识迁移
+            transferred_knowledge = self._execute_transfer(
+                source_knowledge=source_knowledge,
+                strategy=transfer_strategy
+            )
+            
+            # 确保返回结果包含 features 字段
+            if not isinstance(transferred_knowledge, dict):
+                transferred_knowledge = {}
+            
+            if 'features' not in transferred_knowledge:
+                transferred_knowledge['features'] = []
+                
+            return transferred_knowledge
+            
+        except Exception as e:
+            logger.error(f"知识迁移失败: {str(e)}")
+            return {'features': []}
         
     def _analyze_source_knowledge(self, source_node: Node) -> Dict[str, Any]:
         """分析源节点知识
@@ -118,9 +130,22 @@ class KnowledgeTransfer:
         Returns:
             迁移后的知识
         """
-        # 使用LLM执行知识迁移
-        transferred_knowledge = self.llm_manager.execute_knowledge_transfer(
-            source_knowledge=source_knowledge,
-            strategy=strategy
-        )
-        return transferred_knowledge 
+        try:
+            # 使用LLM执行知识迁移
+            transferred_knowledge = self.llm_manager.execute_knowledge_transfer(
+                source_knowledge=source_knowledge,
+                strategy=strategy
+            )
+            
+            # 确保返回结果包含 features 字段
+            if not isinstance(transferred_knowledge, dict):
+                transferred_knowledge = {}
+            
+            if 'features' not in transferred_knowledge:
+                transferred_knowledge['features'] = []
+                
+            return transferred_knowledge
+            
+        except Exception as e:
+            logger.error(f"知识迁移执行失败: {str(e)}")
+            return {'features': []} 

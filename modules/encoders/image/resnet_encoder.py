@@ -7,6 +7,7 @@ import logging
 from typing import Dict, Any, List, Union
 import gc
 import os
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +27,25 @@ class ResNetImageEncoder(nn.Module):
         self.feature_dim = self.config.get('feature_dim', 2048)
         self.batch_size = self.config.get('batch_size', 32)
         
-        # 检查CUDA是否可用
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        logger.info(f"使用设备: {self.device}")
+        # 从系统配置中读取设备设置
+        system_config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'configs', 'system.json')
+        with open(system_config_path, 'r') as f:
+            system_config = json.load(f)
+            
+        device_config = system_config.get('device', {})
+        device_type = device_config.get('type', 'cuda')
+        device_index = device_config.get('index', 0)
+        fallback_to_cpu = device_config.get('fallback_to_cpu', True)
+        
+        if device_type == 'cuda' and torch.cuda.is_available():
+            self.device = torch.device(f'cuda:{device_index}')
+            logger.info(f"使用GPU设备: {self.device}")
+        else:
+            if fallback_to_cpu:
+                self.device = torch.device('cpu')
+                logger.info(f"GPU不可用，使用CPU设备: {self.device}")
+            else:
+                raise RuntimeError("GPU不可用且不允许回退到CPU")
         
         # 加载模型
         self.model = self._load_model()

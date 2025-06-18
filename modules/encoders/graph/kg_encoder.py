@@ -5,6 +5,8 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional, Union, Any
 import logging
 import gc
+import os
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +36,25 @@ class KGEncoder(nn.Module):
         self.dropout = config.get('dropout', 0.1)
         self.batch_size = config.get('batch_size', 32)
         
-        # 检查CUDA是否可用
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        logger.info(f"使用设备: {self.device}")
+        # 从系统配置中读取设备设置
+        system_config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'configs', 'system.json')
+        with open(system_config_path, 'r') as f:
+            system_config = json.load(f)
+            
+        device_config = system_config.get('device', {})
+        device_type = device_config.get('type', 'cuda')
+        device_index = device_config.get('index', 0)
+        fallback_to_cpu = device_config.get('fallback_to_cpu', True)
+        
+        if device_type == 'cuda' and torch.cuda.is_available():
+            self.device = torch.device(f'cuda:{device_index}')
+            logger.info(f"使用GPU设备: {self.device}")
+        else:
+            if fallback_to_cpu:
+                self.device = torch.device('cpu')
+                logger.info(f"GPU不可用，使用CPU设备: {self.device}")
+            else:
+                raise RuntimeError("GPU不可用且不允许回退到CPU")
         
         # 实体嵌入
         self.entity_embeddings = nn.Embedding(self.num_entities, self.embedding_dim)
@@ -324,3 +342,60 @@ class KGEncoder(nn.Module):
         model.load_state_dict(checkpoint['model_state_dict'])
         logger.info(f"模型已从 {path} 加载")
         return model 
+
+    def encode(self, graph: Dict[str, Any]) -> np.ndarray:
+        """编码知识图谱
+        
+        Args:
+            graph: 知识图谱数据，包含节点和边
+            
+        Returns:
+            图谱编码向量
+        """
+        try:
+            # 提取节点和边
+            nodes = graph.get('nodes', [])
+            edges = graph.get('edges', [])
+            
+            if not nodes and not edges:
+                return np.zeros(self.embedding_dim)
+                
+            # 获取节点嵌入
+            node_embeddings = []
+            for node in nodes:
+                if 'id' in node:
+                    try:
+                        emb = self.get_entity_embedding(node['id'])
+                        node_embeddings.append(emb.detach().cpu().numpy())
+                    except ValueError:
+                        continue
+                        
+            # 获取边嵌入
+            edge_embeddings = []
+            for edge in edges:
+                if 'relation' in edge:
+                    try:
+                        emb = self.get_relation_embedding(edge['relation'])
+                        edge_embeddings.append(emb.detach().cpu().numpy())
+                    except ValueError:
+                        continue
+                        
+            # 合并所有嵌入
+            all_embeddings = node_embeddings + edge_embeddings
+            
+            if not all_embeddings:
+                return np.zeros(self.embedding_dim)
+                
+            # 计算平均嵌入
+            mean_embedding = np.mean(all_embeddings, axis=0)
+            
+            # 归一化
+            norm = np.linalg.norm(mean_embedding)
+            if norm > 0:
+                mean_embedding = mean_embedding / norm
+                
+            return mean_embedding
+            
+        except Exception as e:
+            logger.error(f"图谱编码失败: {str(e)}")
+            return np.zeros(self.embedding_dim) 

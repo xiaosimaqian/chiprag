@@ -126,11 +126,34 @@ class ChipRetriever(BaseRetriever):
             # 5. 更新缓存
             self.cache['results'][cache_key] = enhanced_results
             
+            # 6. 确保返回非空结果
+            if not enhanced_results:
+                # 生成默认结果
+                default_result = {
+                    'id': 'default',
+                    'score': 0.0,
+                    'features': [],
+                    'metadata': {
+                        'type': 'default',
+                        'description': '默认结果'
+                    }
+                }
+                enhanced_results = [default_result]
+            
             return enhanced_results
             
         except Exception as e:
             logger.error(f"检索失败: {str(e)}")
-            return []
+            # 返回默认结果
+            return [{
+                'id': 'default',
+                'score': 0.0,
+                'features': [],
+                'metadata': {
+                    'type': 'default',
+                    'description': '默认结果'
+                }
+            }]
         
     def _batch_fuse_results(self, granularity_results: List[Dict],
                            modal_results: List[Dict]) -> List[Dict]:
@@ -342,25 +365,70 @@ class ChipRetriever(BaseRetriever):
         return sorted(results, key=lambda x: x['score'], reverse=True)
         
     def _enhance_results(self, results: List[Dict], query: Dict[str, Any]) -> List[Dict]:
-        """增强结果"""
-        enhanced = []
+        """增强检索结果
         
-        for result in results:
-            # 1. 生成解释
-            explanation = self.llm_manager.generate_explanation(result, query)
-            result['explanation'] = explanation
+        Args:
+            results: 检索结果列表
+            query: 查询信息
             
-            # 2. 生成建议
-            suggestions = self.llm_manager.generate_suggestions(result, query)
-            result['suggestions'] = suggestions
+        Returns:
+            增强后的结果列表
+        """
+        try:
+            # 1. 确保结果非空
+            if not results:
+                return [{
+                    'id': 'default',
+                    'score': 0.0,
+                    'features': [],
+                    'metadata': {
+                        'type': 'default',
+                        'description': '默认结果'
+                    }
+                }]
+            
+            # 2. 计算时间因子
+            for result in results:
+                if 'timestamp' in result:
+                    result['time_factor'] = self._calculate_time_factor(result['timestamp'])
             
             # 3. 计算置信度
-            confidence = self._calculate_confidence(result)
-            result['confidence'] = confidence
+            for result in results:
+                result['confidence'] = self._calculate_confidence(result)
             
-            enhanced.append(result)
+            # 4. 计算特征匹配度
+            for result in results:
+                if 'features' in result:
+                    result['feature_match'] = self._calculate_feature_match(result['features'])
             
-        return enhanced
+            # 5. 计算元数据可靠性
+            for result in results:
+                if 'metadata' in result:
+                    result['metadata_reliability'] = self._calculate_metadata_reliability(result['metadata'])
+            
+            # 6. 使用LLM增强结果
+            enhanced_results = []
+            for result in results:
+                try:
+                    enhanced = self.llm_manager.enhance_result(result, query)
+                    enhanced_results.append(enhanced)
+                except Exception as e:
+                    logger.warning(f"LLM增强失败: {str(e)}")
+                    enhanced_results.append(result)
+            
+            return enhanced_results
+            
+        except Exception as e:
+            logger.error(f"结果增强失败: {str(e)}")
+            return [{
+                'id': 'default',
+                'score': 0.0,
+                'features': [],
+                'metadata': {
+                    'type': 'default',
+                    'description': '默认结果'
+                }
+            }]
         
     def _calculate_time_factor(self, timestamp: str) -> float:
         """计算时间衰减因子"""

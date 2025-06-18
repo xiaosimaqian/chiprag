@@ -17,6 +17,7 @@ class Node:
     """层次结构节点"""
     name: str
     type: str
+    level: int = 0
     children: List['Node'] = field(default_factory=list)
     attributes: Dict[str, Any] = field(default_factory=dict)
     features: Dict[str, Any] = field(default_factory=dict)
@@ -36,6 +37,7 @@ class Node:
             child: 子节点
         """
         child.parent = self
+        child.level = self.level + 1
         self.children.append(child)
         
     def remove_child(self, child: 'Node'):
@@ -450,7 +452,7 @@ class HierarchicalDecompositionManager:
         except Exception as e:
             logging.error(f"层次化分解失败: {str(e)}")
             raise
-            
+        
     def decompose(self, query: Dict[str, Any]) -> List[Dict[str, Any]]:
         """分解查询"""
         try:

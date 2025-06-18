@@ -4,6 +4,14 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(levelname)s:%(name)s:%(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
 class MultiObjectiveEvaluator:
     def __init__(self, config: Dict):
         """初始化多目标评估器
@@ -44,25 +52,24 @@ class MultiObjectiveEvaluator:
         """评估布局质量
         
         Args:
-            data: 包含各项指标的字典
+            data: 包含布局和指标的字典
             
         Returns:
             Dict[str, Any]: 评估结果
         """
         try:
+            # 获取布局和指标数据
+            layout = data.get('layout', {})
+            metrics = data.get('metrics', {})
+            
             # 1. 计算各项指标的得分
-            wirelength_score = self._normalize_score(
-                self._calculate_wirelength(data['layout']),
-                'wirelength'
-            )
-            congestion_score = self._normalize_score(
-                self._calculate_congestion(data['layout']),
-                'congestion'
-            )
-            timing_score = self._normalize_score(
-                self._calculate_timing(data['layout']),
-                'timing'
-            )
+            wirelength = metrics.get('wirelength', self._calculate_wirelength(layout))
+            congestion = metrics.get('congestion', self._calculate_congestion(layout))
+            timing = metrics.get('timing', self._calculate_timing(layout))
+            
+            wirelength_score = self._normalize_score(wirelength, 'wirelength')
+            congestion_score = self._normalize_score(congestion, 'congestion')
+            timing_score = self._normalize_score(timing, 'timing')
             
             # 2. 计算加权总分
             overall_score = (
@@ -85,28 +92,30 @@ class MultiObjectiveEvaluator:
             
             # 5. 返回评估结果
             return {
-                'wirelength': self._calculate_wirelength(data['layout']),
+                'wirelength': wirelength,
                 'wirelength_score': wirelength_score,
+                'congestion': congestion,
                 'congestion_score': congestion_score,
+                'timing': timing,
                 'timing_score': timing_score,
                 'overall_score': overall_score,
                 'constraint_satisfaction': constraint_satisfaction,
                 'evaluation_report': evaluation_report,
                 'details': {
                     'wirelength': {
-                        'value': self._calculate_wirelength(data['layout']),
+                        'value': wirelength,
                         'threshold': self.thresholds['wirelength'],
                         'score': wirelength_score,
                         'weight': self.weights['wirelength']
                     },
                     'congestion': {
-                        'value': self._calculate_congestion(data['layout']),
+                        'value': congestion,
                         'threshold': self.thresholds['congestion'],
                         'score': congestion_score,
                         'weight': self.weights['congestion']
                     },
                     'timing': {
-                        'value': self._calculate_timing(data['layout']),
+                        'value': timing,
                         'threshold': self.thresholds['timing'],
                         'score': timing_score,
                         'weight': self.weights['timing']
@@ -119,7 +128,9 @@ class MultiObjectiveEvaluator:
             return {
                 'wirelength': 0.0,
                 'wirelength_score': 0.0,
+                'congestion': 0.0,
                 'congestion_score': 0.0,
+                'timing': 0.0,
                 'timing_score': 0.0,
                 'overall_score': 0.0,
                 'constraint_satisfaction': 0.0,
@@ -137,9 +148,15 @@ class MultiObjectiveEvaluator:
         Returns:
             归一化后的分数
         """
+        logger.info(f"_normalize_score: value={value}, metric={metric}")
+        logger.info(f"_normalize_score: self.metrics={self.metrics}")
+        logger.info(f"_normalize_score: self.metrics type={type(self.metrics)}")
         if metric in self.metrics:
             metric_config = self.metrics[metric]
+            logger.info(f"_normalize_score: metric_config={metric_config}")
+            logger.info(f"_normalize_score: metric_config type={type(metric_config)}")
             threshold = metric_config['threshold']
+            logger.info(f"_normalize_score: threshold={threshold}")
             
             if metric_config['type'] == 'minimize':
                 return min(1.0, threshold / (value + 1e-6))
@@ -156,23 +173,54 @@ class MultiObjectiveEvaluator:
         Returns:
             线长得分
         """
+        logger.info(f"_calculate_wirelength: layout={layout}")
         try:
             # 1. 获取布线信息
-            routing = layout.get('routing', [])
-            if not routing:
+            nets = layout.get('nets', [])
+            logger.info(f"_calculate_wirelength: nets={nets}")
+            if not nets:
                 return 0.0
                 
             # 2. 计算每条线的长度
             total_length = 0.0
-            for wire in routing:
-                start_point = wire[0:2]  # 起点坐标
-                end_point = wire[2:4]    # 终点坐标
+            for net in nets:
+                logger.info(f"_calculate_wirelength: processing net={net}")
+                source = net.get('source')
+                target = net.get('target')
+                logger.info(f"_calculate_wirelength: source={source}, target={target}")
                 
-                # 计算曼哈顿距离
-                length = abs(end_point[0] - start_point[0]) + \
-                        abs(end_point[1] - start_point[1])
-                total_length += length
+                # 获取源组件和目标组件的位置
+                components = layout.get('components', [])
+                logger.info(f"_calculate_wirelength: components={components}")
+                source_comp = next((c for c in components if c.get('name') == source), None)
+                target_comp = next((c for c in components if c.get('name') == target), None)
+                logger.info(f"_calculate_wirelength: source_comp={source_comp}, target_comp={target_comp}")
                 
+                if source_comp and target_comp:
+                    source_pos = source_comp.get('position', {})
+                    target_pos = target_comp.get('position', {})
+                    logger.info(f"_calculate_wirelength: source_pos={source_pos}, target_pos={target_pos}")
+                    
+                    # 获取坐标
+                    if isinstance(source_pos, dict):
+                        x1 = float(source_pos.get('x', 0))
+                        y1 = float(source_pos.get('y', 0))
+                    else:
+                        x1, y1 = map(float, source_pos if isinstance(source_pos, (list, tuple)) else (0, 0))
+                        
+                    if isinstance(target_pos, dict):
+                        x2 = float(target_pos.get('x', 0))
+                        y2 = float(target_pos.get('y', 0))
+                    else:
+                        x2, y2 = map(float, target_pos if isinstance(target_pos, (list, tuple)) else (0, 0))
+                    
+                    logger.info(f"_calculate_wirelength: coordinates: ({x1}, {y1}) -> ({x2}, {y2})")
+                    
+                    # 计算曼哈顿距离
+                    length = abs(x2 - x1) + abs(y2 - y1)
+                    total_length += length
+                    
+            logger.info(f"_calculate_wirelength: total_length={total_length}")
             return total_length
             
         except Exception as e:
@@ -188,10 +236,11 @@ class MultiObjectiveEvaluator:
         Returns:
             拥塞度得分
         """
+        print(f"_calculate_congestion: layout={layout}")
         try:
             # 1. 获取布局信息
-            placement = layout.get('placement', [])
-            if not placement:
+            components = layout.get('components', [])
+            if not components:
                 return 0.0
                 
             # 2. 创建网格
@@ -199,8 +248,15 @@ class MultiObjectiveEvaluator:
             grid = np.zeros((grid_size, grid_size))
             
             # 3. 统计每个网格中的组件数量
-            for component in placement:
-                x, y = component[0:2]  # 组件位置
+            for component in components:
+                position = component.get('position', {})
+                if isinstance(position, dict):
+                    x = float(position.get('x', 0))
+                    y = float(position.get('y', 0))
+                else:
+                    x, y = map(float, position if isinstance(position, (list, tuple)) else (0, 0))
+                    
+                # 将坐标映射到网格
                 grid_x = int(x * grid_size)
                 grid_y = int(y * grid_size)
                 
@@ -218,7 +274,7 @@ class MultiObjectiveEvaluator:
             return 0.0
         
     def _calculate_timing(self, layout: Dict) -> float:
-        """计算时序
+        """计算时序得分
         
         Args:
             layout: 布局数据
@@ -226,27 +282,39 @@ class MultiObjectiveEvaluator:
         Returns:
             时序得分
         """
+        print(f"_calculate_timing: layout={layout}")
         try:
             # 1. 获取时序信息
-            timing = layout.get('timing', {})
-            if not timing:
+            timing_info = layout.get('timing', {})
+            if not timing_info:
                 return 0.0
                 
             # 2. 计算关键路径延迟
-            max_delay = timing.get('max_delay', 0.0)
-            setup_time = timing.get('setup_time', 0.0)
-            hold_time = timing.get('hold_time', 0.0)
+            critical_paths = timing_info.get('critical_paths', [])
+            if not critical_paths:
+                return 0.0
+                
+            # 3. 计算平均延迟
+            total_delay = 0.0
+            for path in critical_paths:
+                if isinstance(path, dict):
+                    delay = path.get('delay', 0.0)
+                else:
+                    delay = float(path) if isinstance(path, (int, float)) else 0.0
+                total_delay += delay
+                
+            avg_delay = total_delay / len(critical_paths) if critical_paths else 0.0
             
-            # 3. 计算时序得分
-            timing_score = max_delay / (setup_time + hold_time + 1e-6)
+            # 4. 计算时序得分
+            timing_score = 1.0 / (1.0 + avg_delay)
             
             return timing_score
             
         except Exception as e:
-            logger.error(f"计算时序失败: {str(e)}")
+            logger.error(f"计算时序得分失败: {str(e)}")
             return 0.0
             
-    def _evaluate_constraints(self, data: Dict) -> float:
+    def _evaluate_constraints(self, data: Dict[str, Any]) -> float:
         """评估约束满足度
         
         Args:
@@ -257,119 +325,63 @@ class MultiObjectiveEvaluator:
         """
         try:
             # 1. 获取约束信息
-            constraints = data.get('constraints', {})
+            constraints = data.get('constraints', [])  # 确保是列表类型
             if not constraints:
-                return 0.0
+                return 1.0  # 如果没有约束，则认为完全满足
                 
-            # 2. 计算各项约束的满足度
-            area_satisfaction = self._evaluate_area_constraint(
-                data['layout'],
-                constraints.get('area', '100x100')
-            )
-            power_satisfaction = self._evaluate_power_constraint(
-                data['layout'],
-                constraints.get('power', '1W')
-            )
-            timing_satisfaction = self._evaluate_timing_constraint(
-                data['layout'],
-                constraints.get('timing', '1ns')
-            )
+            # 2. 获取布局信息
+            layout = data.get('layout', {})
+            components = layout.get('components', [])
             
-            # 3. 计算总体约束满足度
-            return (area_satisfaction + power_satisfaction + timing_satisfaction) / 3.0
+            # 3. 检查每个约束
+            satisfied_constraints = 0
+            total_constraints = len(constraints)
+            
+            for constraint in constraints:
+                if isinstance(constraint, dict):
+                    # 检查组件位置约束
+                    if 'component' in constraint and 'position' in constraint:
+                        comp_name = constraint['component']
+                        required_pos = constraint['position']
+                        
+                        # 查找组件
+                        comp = next((c for c in components if c.get('name') == comp_name), None)
+                        if comp:
+                            actual_pos = comp.get('position', {})
+                            if isinstance(actual_pos, dict):
+                                x = actual_pos.get('x', 0)
+                                y = actual_pos.get('y', 0)
+                            else:
+                                x, y = actual_pos if isinstance(actual_pos, (list, tuple)) else (0, 0)
+                                
+                            if x == required_pos.get('x', 0) and y == required_pos.get('y', 0):
+                                satisfied_constraints += 1
+                                
+                    # 检查组件大小约束
+                    elif 'component' in constraint and 'size' in constraint:
+                        comp_name = constraint['component']
+                        required_size = constraint['size']
+                        
+                        # 查找组件
+                        comp = next((c for c in components if c.get('name') == comp_name), None)
+                        if comp:
+                            actual_size = comp.get('size', {})
+                            if isinstance(actual_size, dict):
+                                width = actual_size.get('width', 0)
+                                height = actual_size.get('height', 0)
+                            else:
+                                width, height = actual_size if isinstance(actual_size, (list, tuple)) else (0, 0)
+                                
+                            if width == required_size.get('width', 0) and height == required_size.get('height', 0):
+                                satisfied_constraints += 1
+                                
+            # 4. 计算约束满足度
+            satisfaction_score = satisfied_constraints / total_constraints if total_constraints > 0 else 1.0
+            
+            return satisfaction_score
             
         except Exception as e:
             logger.error(f"评估约束满足度失败: {str(e)}")
-            return 0.0
-            
-    def _evaluate_area_constraint(self, layout: Dict, constraint: str) -> float:
-        """评估面积约束
-        
-        Args:
-            layout: 布局数据
-            constraint: 面积约束
-            
-        Returns:
-            float: 面积约束满足度
-        """
-        try:
-            # 1. 解析约束
-            width, height = map(float, constraint.split('x'))
-            max_area = width * height
-            
-            # 2. 计算实际面积
-            placement = layout.get('placement', [])
-            if not placement:
-                return 0.0
-                
-            actual_area = 0.0
-            for component in placement:
-                w, h = component[2:4]  # 组件尺寸
-                actual_area += w * h
-                
-            # 3. 计算满足度
-            return min(1.0, max_area / (actual_area + 1e-6))
-            
-        except Exception as e:
-            logger.error(f"评估面积约束失败: {str(e)}")
-            return 0.0
-            
-    def _evaluate_power_constraint(self, layout: Dict, constraint: str) -> float:
-        """评估功耗约束
-        
-        Args:
-            layout: 布局数据
-            constraint: 功耗约束
-            
-        Returns:
-            float: 功耗约束满足度
-        """
-        try:
-            # 1. 解析约束
-            max_power = float(constraint.replace('W', ''))
-            
-            # 2. 计算实际功耗
-            placement = layout.get('placement', [])
-            routing = layout.get('routing', [])
-            if not placement or not routing:
-                return 0.0
-                
-            # 3. 简化的功耗计算
-            actual_power = len(placement) * 0.01 + len(routing) * 0.005
-            
-            # 4. 计算满足度
-            return min(1.0, max_power / (actual_power + 1e-6))
-            
-        except Exception as e:
-            logger.error(f"评估功耗约束失败: {str(e)}")
-            return 0.0
-            
-    def _evaluate_timing_constraint(self, layout: Dict, constraint: str) -> float:
-        """评估时序约束
-        
-        Args:
-            layout: 布局数据
-            constraint: 时序约束
-            
-        Returns:
-            float: 时序约束满足度
-        """
-        try:
-            # 1. 解析约束
-            max_timing = float(constraint.replace('ns', ''))
-            
-            # 2. 获取实际时序
-            timing = layout.get('timing', {})
-            if not timing:
-                return 0.0
-                
-            actual_timing = timing.get('max_delay', 0.0)
-            
-            # 3. 计算满足度
-            return min(1.0, max_timing / (actual_timing + 1e-6))
-            
-        except Exception as e:
-            logger.error(f"评估时序约束失败: {str(e)}")
             return 0.0
             
     def _generate_report(self, wirelength_score: float,
@@ -410,4 +422,9 @@ class MultiObjectiveEvaluator:
         if constraint_satisfaction < 0.8:
             report.append("- 约束满足度不足，需要调整布局")
             
-        return "\n".join(report) 
+        return "\n".join(report)
+
+    def __str__(self):
+        logger.info(f"self.thresholds: {self.thresholds} ({type(self.thresholds)})")
+        logger.info(f"self.weights: {self.weights} ({type(self.weights)})")
+        return f"MultiObjectiveEvaluator(config={self.config})" 

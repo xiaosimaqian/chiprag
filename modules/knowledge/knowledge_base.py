@@ -40,6 +40,8 @@ class KnowledgeBase:
         }
         self.layout_experience_path = self.config.get('layout_experience_path', './layout_experience')
         self._init_components()
+        self._init_knowledge_base()
+        self.load()  # 在初始化时就加载数据
         
     def _validate_config(self):
         """验证配置"""
@@ -109,6 +111,12 @@ class KnowledgeBase:
     def _init_knowledge_base(self):
         """初始化知识库"""
         try:
+            # 确保目录存在
+            os.makedirs(self.layout_experience_path, exist_ok=True)
+            
+            # 初始化数据文件路径
+            self.data_file = os.path.join(self.layout_experience_path, "data.pkl")
+            
             # 如果数据文件不存在，创建空的知识库
             if not os.path.exists(self.data_file):
                 with open(self.data_file, 'wb') as f:
@@ -117,7 +125,8 @@ class KnowledgeBase:
                 
         except Exception as e:
             logger.error(f"初始化知识库失败: {str(e)}")
-            
+            raise
+        
     def _load_data(self) -> List[Dict]:
         """加载知识库数据
         
@@ -211,99 +220,67 @@ class KnowledgeBase:
         self._save_data()
         
     def _extract_global_features(self, layout: Dict) -> Dict:
-        """提取布局的全局特征
+        """提取全局特征
         
         Args:
             layout: 布局数据
             
         Returns:
-            全局特征字典
+            Dict: 全局特征
         """
-        features = {}
-        
-        # 提取面积特征
-        if 'die_area' in layout:
-            die_area = layout['die_area']
-            if isinstance(die_area, dict):
-                features['area'] = die_area['width'] * die_area['height']
-                if die_area['height'] != 0:
-                    features['aspect_ratio'] = die_area['width'] / die_area['height']
-                else:
-                    features['aspect_ratio'] = 0
-            elif isinstance(die_area, list) and len(die_area) >= 2:
-                features['area'] = die_area[0] * die_area[1]
-                if die_area[1] != 0:
-                    features['aspect_ratio'] = die_area[0] / die_area[1]
-                else:
-                    features['aspect_ratio'] = 0
-        
-        # 提取组件特征
-        if 'components' in layout:
-            components = layout['components']
-            if isinstance(components, dict):
-                comp_iter = components.values()
-                features['num_components'] = len(components)
-            elif isinstance(components, list):
-                comp_iter = components
-                features['num_components'] = len(components)
-            else:
-                comp_iter = []
-                features['num_components'] = 0
+        try:
+            if not layout:
+                logger.warning("布局数据为空")
+                return {}
+                
+            features = {}
             
-            # 计算组件密度
-            total_area = 0
-            for comp in comp_iter:
-                if isinstance(comp, dict):
-                    if 'width' in comp and 'height' in comp:
-                        total_area += comp['width'] * comp['height']
-                    elif 'area' in comp:
-                        total_area += comp['area']
-            if features.get('area', 0) > 0:
-                features['component_density'] = total_area / features['area']
-            else:
-                features['component_density'] = 0
-            # 计算组件类型分布
-            type_counts = defaultdict(int)
-            for comp in comp_iter:
-                if isinstance(comp, dict) and 'type' in comp:
-                    type_counts[comp['type']] += 1
-            features['component_types'] = dict(type_counts)
-        
-        # 提取网络特征
-        if 'nets' in layout:
-            nets = layout['nets']
-            if isinstance(nets, dict):
-                net_iter = nets.values()
-                features['num_nets'] = len(nets)
-            elif isinstance(nets, list):
-                net_iter = nets
-                features['num_nets'] = len(nets)
-            else:
-                net_iter = []
-                features['num_nets'] = 0
-            # 计算平均网络长度
-            net_lengths = []
-            for net in net_iter:
-                if isinstance(net, dict) and 'pins' in net:
-                    pins = net['pins']
-                    if len(pins) >= 2:
-                        # 计算所有引脚对之间的曼哈顿距离
-                        for i in range(len(pins)):
-                            for j in range(i + 1, len(pins)):
-                                pin1 = pins[i]
-                                pin2 = pins[j]
-                                if isinstance(pin1, dict) and isinstance(pin2, dict):
-                                    if 'x' in pin1 and 'y' in pin1 and 'x' in pin2 and 'y' in pin2:
-                                        length = abs(pin1['x'] - pin2['x']) + abs(pin1['y'] - pin2['y'])
-                                        net_lengths.append(length)
-            if net_lengths:
-                features['avg_net_length'] = sum(net_lengths) / len(net_lengths)
-                features['max_net_length'] = max(net_lengths)
-            else:
-                features['avg_net_length'] = 0
-                features['max_net_length'] = 0
-        
-        return features
+            # 提取组件数量
+            if 'components' in layout and layout['components']:
+                features['num_components'] = len(layout['components'])
+                
+                # 提取组件尺寸信息
+                widths = []
+                heights = []
+                for comp in layout['components']:
+                    if comp and 'width' in comp:
+                        widths.append(comp['width'])
+                    if comp and 'height' in comp:
+                        heights.append(comp['height'])
+                        
+                if widths:
+                    features['avg_width'] = sum(widths) / len(widths)
+                    features['max_width'] = max(widths)
+                if heights:
+                    features['avg_height'] = sum(heights) / len(heights)
+                    features['max_height'] = max(heights)
+            
+            # 提取网络信息
+            if 'nets' in layout and layout['nets']:
+                features['num_nets'] = len(layout['nets'])
+                
+                # 提取连接信息
+                connections = []
+                for net in layout['nets']:
+                    if net and 'connections' in net and net['connections']:
+                        connections.extend(net['connections'])
+                features['num_connections'] = len(connections)
+            
+            # 提取元数据信息
+            if 'metadata' in layout and layout['metadata']:
+                features['has_metadata'] = True
+                if 'description' in layout['metadata']:
+                    features['has_description'] = True
+                if 'author' in layout['metadata']:
+                    features['has_author'] = True
+                if 'date' in layout['metadata']:
+                    features['has_date'] = True
+            
+            return features
+            
+        except Exception as e:
+            logger.error(f"提取全局特征失败: {str(e)}")
+            return {}
         
     def _extract_module_features(self, layout: Dict) -> List[np.ndarray]:
         """提取模块特征
@@ -314,19 +291,33 @@ class KnowledgeBase:
         Returns:
             模块特征列表
         """
-        features = []
-        for comp in layout['components']:
-            # 计算面积
-            area = comp['width'] * comp['height']
+        try:
+            if not layout or 'components' not in layout or not layout['components']:
+                return []
+                
+            features = []
+            for comp in layout['components']:
+                if not comp:
+                    continue
+                    
+                # 计算面积
+                if 'width' not in comp or 'height' not in comp:
+                    continue
+                    
+                area = comp['width'] * comp['height']
+                
+                comp_features = [
+                    area,
+                    comp['width'],
+                    comp['height'],
+                    len(comp.get('connections', {}))
+                ]
+                features.append(np.array(comp_features))
+            return features
             
-            comp_features = [
-                area,
-                comp['width'],
-                comp['height'],
-                len(comp.get('connections', {}))
-            ]
-            features.append(np.array(comp_features))
-        return features
+        except Exception as e:
+            logger.error(f"提取模块特征失败: {str(e)}")
+            return []
         
     def _extract_connection_features(self, layout: Dict) -> List[np.ndarray]:
         """提取连接特征
@@ -337,15 +328,26 @@ class KnowledgeBase:
         Returns:
             连接特征列表
         """
-        features = []
-        for net in layout['nets']:
-            net_features = [
-                len(net['connections']),
-                net.get('length', 0),
-                net.get('width', 0)
-            ]
-            features.append(np.array(net_features))
-        return features
+        try:
+            if not layout or 'nets' not in layout or not layout['nets']:
+                return []
+                
+            features = []
+            for net in layout['nets']:
+                if not net or 'connections' not in net or not net['connections']:
+                    continue
+                    
+                net_features = [
+                    len(net['connections']),
+                    net.get('length', 0),
+                    net.get('width', 0)
+                ]
+                features.append(np.array(net_features))
+            return features
+            
+        except Exception as e:
+            logger.error(f"提取连接特征失败: {str(e)}")
+            return []
         
     def _extract_constraint_features(self, 
                                    layout: Dict,
@@ -416,46 +418,202 @@ class KnowledgeBase:
             'features': features['constraint']
         })
         
-    def get_similar_cases(self, 
-                         query: Dict,
-                         top_k: int = 5,
-                         similarity_threshold: float = 0.5) -> List[Dict]:
+    def get_similar_cases(self, query: Dict[str, Any], top_k: int = 3, similarity_threshold: float = 0.5) -> List[Dict[str, Any]]:
         """获取相似案例
         
         Args:
-            query: 查询布局
-            top_k: 返回的案例数量
+            query: 查询信息
+            top_k: 返回结果数量
             similarity_threshold: 相似度阈值
             
         Returns:
-            相似案例列表
+            List[Dict[str, Any]]: 相似案例列表
         """
         try:
-            # 提取查询布局的特征
-            query_features = self._extract_global_features(query)
-            
-            # 计算与所有案例的相似度
+            # 加载知识库数据
+            with open(self.data_file, 'rb') as f:
+                cases = pickle.load(f)
+                
+            if not cases:
+                return []
+                
+            # 计算相似度
             similarities = []
-            for case in self.cases:
-                if 'layout' in case:
-                    case_features = self._extract_global_features(case['layout'])
-                    similarity = self._compute_similarity(query_features, case_features)
-                    if similarity >= similarity_threshold:
-                        similarities.append({
-                            'case': case['layout'],
-                            'similarity': similarity
-                        })
-            
+            for case in cases:
+                # 计算特征相似度
+                feature_sim = self._compute_feature_similarity(query, case)
+                
+                # 计算层次结构相似度
+                hierarchy_sim = self._compute_hierarchy_similarity(query, case)
+                
+                # 计算约束相似度
+                constraint_sim = self._compute_constraint_similarity(query, case)
+                
+                # 加权融合
+                similarity = (
+                    0.4 * feature_sim +
+                    0.4 * hierarchy_sim +
+                    0.2 * constraint_sim
+                )
+                
+                if similarity >= similarity_threshold:
+                    similarities.append((case, similarity))
+                    
             # 按相似度排序
-            similarities.sort(key=lambda x: x['similarity'], reverse=True)
+            similarities.sort(key=lambda x: x[1], reverse=True)
             
-            # 返回top_k个最相似的案例
-            return [item['case'] for item in similarities[:top_k]]
+            # 返回top_k结果
+            return [case for case, _ in similarities[:top_k]]
             
         except Exception as e:
-            logger.error(f"获取相似案例失败: {str(e)}")
+            self.logger.error(f"获取相似案例失败: {str(e)}")
             return []
+            
+    def _compute_feature_similarity(self, query: Dict[str, Any], case: Dict[str, Any]) -> float:
+        """计算特征相似度
         
+        Args:
+            query: 查询信息
+            case: 案例信息
+            
+        Returns:
+            float: 相似度分数
+        """
+        try:
+            # 获取特征
+            query_features = query.get('features', {})
+            case_features = case.get('features', {})
+            
+            if not query_features or not case_features:
+                return 0.0
+                
+            # 计算数值特征相似度
+            numerical_sim = 0.0
+            numerical_count = 0
+            
+            for key in query_features:
+                if key in case_features and isinstance(query_features[key], (int, float)):
+                    numerical_count += 1
+                    diff = abs(query_features[key] - case_features[key])
+                    max_val = max(abs(query_features[key]), abs(case_features[key]))
+                    if max_val > 0:
+                        numerical_sim += 1 - (diff / max_val)
+                        
+            numerical_sim = numerical_sim / numerical_count if numerical_count > 0 else 0.0
+            
+            # 计算文本特征相似度
+            text_sim = 0.0
+            text_count = 0
+            
+            for key in query_features:
+                if key in case_features and isinstance(query_features[key], str):
+                    text_count += 1
+                    if query_features[key] == case_features[key]:
+                        text_sim += 1.0
+                        
+            text_sim = text_sim / text_count if text_count > 0 else 0.0
+            
+            # 加权融合
+            return 0.6 * numerical_sim + 0.4 * text_sim
+            
+        except Exception as e:
+            self.logger.error(f"计算特征相似度失败: {str(e)}")
+            return 0.0
+            
+    def _compute_hierarchy_similarity(self, query: Dict[str, Any], case: Dict[str, Any]) -> float:
+        """计算层次结构相似度
+        
+        Args:
+            query: 查询信息
+            case: 案例信息
+            
+        Returns:
+            float: 相似度分数
+        """
+        try:
+            # 获取层次结构
+            query_hierarchy = query.get('hierarchy', {})
+            case_hierarchy = case.get('hierarchy', {})
+            
+            if not query_hierarchy or not case_hierarchy:
+                return 0.0
+                
+            # 计算层次级别相似度
+            query_levels = set(query_hierarchy.get('levels', []))
+            case_levels = set(case_hierarchy.get('levels', []))
+            
+            level_sim = len(query_levels & case_levels) / len(query_levels | case_levels) if query_levels or case_levels else 0.0
+            
+            # 计算模块相似度
+            query_modules = set(query_hierarchy.get('modules', []))
+            case_modules = set(case_hierarchy.get('modules', []))
+            
+            module_sim = len(query_modules & case_modules) / len(query_modules | case_modules) if query_modules or case_modules else 0.0
+            
+            # 加权融合
+            return 0.6 * level_sim + 0.4 * module_sim
+            
+        except Exception as e:
+            self.logger.error(f"计算层次结构相似度失败: {str(e)}")
+            return 0.0
+            
+    def _compute_constraint_similarity(self, query: Dict[str, Any], case: Dict[str, Any]) -> float:
+        """计算约束相似度
+        
+        Args:
+            query: 查询信息
+            case: 案例信息
+            
+        Returns:
+            float: 相似度分数
+        """
+        try:
+            # 获取约束
+            query_constraints = query.get('constraints', {})
+            case_constraints = case.get('constraints', {})
+            
+            if not query_constraints or not case_constraints:
+                return 0.0
+                
+            # 计算约束类型相似度
+            query_types = set(query_constraints.keys())
+            case_types = set(case_constraints.keys())
+            
+            type_sim = len(query_types & case_types) / len(query_types | case_types) if query_types or case_types else 0.0
+            
+            # 计算约束值相似度
+            value_sim = 0.0
+            value_count = 0
+            
+            for constraint_type in query_types & case_types:
+                query_values = query_constraints[constraint_type]
+                case_values = case_constraints[constraint_type]
+                
+                if isinstance(query_values, dict) and isinstance(case_values, dict):
+                    value_count += 1
+                    common_keys = set(query_values.keys()) & set(case_values.keys())
+                    
+                    if common_keys:
+                        type_value_sim = 0.0
+                        for key in common_keys:
+                            if isinstance(query_values[key], (int, float)):
+                                diff = abs(query_values[key] - case_values[key])
+                                max_val = max(abs(query_values[key]), abs(case_values[key]))
+                                if max_val > 0:
+                                    type_value_sim += 1 - (diff / max_val)
+                                    
+                        type_value_sim /= len(common_keys)
+                        value_sim += type_value_sim
+                        
+            value_sim = value_sim / value_count if value_count > 0 else 0.0
+            
+            # 加权融合
+            return 0.4 * type_sim + 0.6 * value_sim
+            
+        except Exception as e:
+            self.logger.error(f"计算约束相似度失败: {str(e)}")
+            return 0.0
+
     def hierarchical_decomposition(self, design_info: Dict) -> Dict:
         """对设计进行层次化分解
         
@@ -930,12 +1088,55 @@ class KnowledgeBase:
             json.dump(self.knowledge, f, indent=2)
             
     def load(self, path=None):
-        """加载知识库数据"""
-        if path is None:
-            path = self.config['path']
-        # 添加一些测试数据
-        self.cases = [{'id': 1, 'content': 'test case 1'}]
-        return self
+        """加载知识库数据
+        
+        Args:
+            path: 知识库路径，如果为None则使用layout_experience_path
+            
+        Returns:
+            self: 知识库实例
+        """
+        try:
+            if path is None:
+                path = self.layout_experience_path
+                
+            # 确保目录存在
+            os.makedirs(path, exist_ok=True)
+            
+            # 加载案例数据
+            cases_file = os.path.join(path, "cases.pkl")
+            if os.path.exists(cases_file):
+                with open(cases_file, 'rb') as f:
+                    self.cases = pickle.load(f)
+            else:
+                self.cases = []
+                
+            # 加载知识图谱
+            graph_file = os.path.join(path, "knowledge_graph.pkl")
+            if os.path.exists(graph_file):
+                with open(graph_file, 'rb') as f:
+                    self.knowledge_graph = pickle.load(f)
+            else:
+                self.knowledge_graph = {
+                    'global': [],
+                    'module': [],
+                    'connection': [],
+                    'constraint': []
+                }
+                
+            logger.info(f"成功加载知识库数据，包含 {len(self.cases)} 个案例")
+            return self
+            
+        except Exception as e:
+            logger.error(f"加载知识库数据失败: {str(e)}")
+            self.cases = []
+            self.knowledge_graph = {
+                'global': [],
+                'module': [],
+                'connection': [],
+                'constraint': []
+            }
+            return self
 
     def update(self, new_knowledge):
         """更新知识库数据"""

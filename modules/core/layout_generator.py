@@ -11,7 +11,7 @@ from ..knowledge.knowledge_base import KnowledgeBase
 from ..utils.llm_manager import LLMManager
 import torch
 import torch.nn as nn
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,12 @@ class LayoutConfig:
     mutation_rate: float = 0.1
     crossover_rate: float = 0.8
     target_satisfaction: float = 95.0
+    die_width: float = 20000.0  # 扩大10倍
+    die_height: float = 20000.0  # 扩大10倍
+    die_area: Dict[str, float] = field(default_factory=lambda: {
+        'width': 20000.0,  # 扩大10倍
+        'height': 20000.0  # 扩大10倍
+    })
 
 class LayoutGenerator(nn.Module):
     """布局生成器类，负责生成满足约束的布局"""
@@ -248,7 +254,7 @@ class LayoutGenerator(nn.Module):
             float: 布局密度
         """
         total_area = torch.sum(placement[:, 2] * placement[:, 3])
-        layout_area = 4.0  # 假设布局区域为2x2的正方形
+        layout_area = self.layout_config.die_width * self.layout_config.die_height
         return total_area.item() / layout_area
         
     def _adjust_density(self, placement: torch.Tensor) -> torch.Tensor:
@@ -780,161 +786,83 @@ class LayoutGenerator(nn.Module):
         Returns:
             初始布局数据
         """
-        # 解析设计规格
-        components = design_spec.get('components', [])
-        nets = design_spec.get('nets', [])
-        die_area = design_spec.get('die_area', [0, 0, 1000, 1000])
+        # 1. 组件数量减为50
+        components = design_spec.get('components', [])[:50]
+        logger.info(f"输入组件数量: {len(components)}")
+        nets = []  # 3. 取消布线
         
-        # 计算可用面积（微米²）
-        if isinstance(die_area, list) and len(die_area) == 4:
-            # DEF格式：[x1, y1, x2, y2]
-            area = (die_area[2] - die_area[0]) * (die_area[3] - die_area[1])
-            width = die_area[2] - die_area[0]
-            height = die_area[3] - die_area[1]
-        else:
-            # 字典格式：{'width': w, 'height': h}
-            area = die_area['width'] * die_area['height']
-            width = die_area['width']
-            height = die_area['height']
+        # 组件尺寸缩小为原来的1/10
+        SCALE = 0.1
+        SPACING = 10  # 4. 组件间距设置为10
         
-        # 计算组件位置
-        positioned_components = []
-        
-        # 1. 按组件类型分组
-        component_groups = {}
+        # 计算所有组件面积总和
+        total_area = 0.0
+        comp_sizes = []
         for comp in components:
             comp_type = comp.get('type', 'L')
-            if comp_type not in component_groups:
-                component_groups[comp_type] = []
-            component_groups[comp_type].append(comp)
-        
-        # 2. 计算每种类型组件的尺寸
-        type_sizes = {}
-        for comp_type, comps in component_groups.items():
             if comp_type in design_spec.get('cell_library', {}):
                 size = design_spec['cell_library'][comp_type]['SIZE']
-                type_sizes[comp_type] = {
-                    'width': size['width'],
-                    'height': size['height'],
-                    'count': len(comps)
-                }
+                comp_width = size['width'] * SCALE
+                comp_height = size['height'] * SCALE
             else:
-                type_sizes[comp_type] = {
-                    'width': 1.0,
-                    'height': 1.0,
-                    'count': len(comps)
-                }
+                comp_width = 1.0 * SCALE
+                comp_height = 1.0 * SCALE
+            comp_sizes.append((comp_width, comp_height))
+            total_area += comp_width * comp_height
         
-        # 3. 计算布局网格
-        total_components = len(components)
-        grid_size = int(np.sqrt(total_components * 1.5))  # 增加1.5倍空间以优化布局
+        # 1. die面积为组件总面积的100倍，取正方形
+        die_area_val = total_area * 100
+        die_width = die_height = np.sqrt(die_area_val)
+        die_area = {'width': die_width, 'height': die_height}
+        width = die_width
+        height = die_height
+        area = die_area_val
+        logger.info(f"die_width={die_width}, die_height={die_height}, total_area={total_area}")
         
-        # 4. 计算每个网格单元的大小
-        cell_width = width / grid_size
-        cell_height = height / grid_size
+        # 行优先紧凑排布
+        comp_with_size = list(zip(components, comp_sizes))
+        comp_with_size.sort(key=lambda x: x[1][0]*x[1][1], reverse=True)
         
-        # 5. 为每种类型的组件分配区域
-        current_x = die_area[0]
-        current_y = die_area[1]
-        max_height = 0
-        
-        for comp_type, size_info in type_sizes.items():
-            comps = component_groups[comp_type]
-            comp_width = size_info['width']
-            comp_height = size_info['height']
-            
-            # 计算这种类型组件需要的行数
-            comps_per_row = int(cell_width / comp_width)
-            if comps_per_row < 1:
-                comps_per_row = 1
-            
-            rows_needed = int(np.ceil(len(comps) / comps_per_row))
-            
-            # 为每个组件分配位置
-            for i, comp in enumerate(comps):
-                row = i // comps_per_row
-                col = i % comps_per_row
-                
-                x = current_x + col * (comp_width + cell_width * 0.1)  # 添加10%间距
-                y = current_y + row * (comp_height + cell_height * 0.1)
-                
-                positioned_components.append({
-                    'id': comp.get('id', f'comp_{len(positioned_components)}'),
-                    'type': comp_type,
-                    'x': x,
-                    'y': y,
-                    'width': comp_width,
-                    'height': comp_height,
-                    'orientation': 'N'  # 默认方向
-                })
-            
-            # 更新下一个区域的起始位置
-            current_y += rows_needed * (comp_height + cell_height * 0.1)
-            max_height = max(max_height, rows_needed * (comp_height + cell_height * 0.1))
-            
-            # 如果当前区域高度超过芯片高度，移动到下一列
-            if current_y + comp_height > die_area[3]:
-                current_x += cell_width * comps_per_row
-                current_y = die_area[1]
-        
-        # 6. 生成网络路由
-        routed_nets = []
-        for net in nets:
-            # 找到连接的组件
-            connected_components = []
-            for pin in net.get('pins', []):
-                comp_id = pin.get('component')
-                if comp_id:
-                    comp = next((c for c in positioned_components if c['id'] == comp_id), None)
-                    if comp:
-                        connected_components.append(comp)
-            
-            if len(connected_components) >= 2:
-                # 生成优化的路由
-                route = []
-                for i in range(len(connected_components) - 1):
-                    comp1 = connected_components[i]
-                    comp2 = connected_components[i + 1]
-                    
-                    # 计算组件中心点
-                    center1 = (
-                        comp1['x'] + comp1['width'] / 2,
-                        comp1['y'] + comp1['height'] / 2
-                    )
-                    center2 = (
-                        comp2['x'] + comp2['width'] / 2,
-                        comp2['y'] + comp2['height'] / 2
-                    )
-                    
-                    # 添加中间点以优化布线
-                    if abs(center1[0] - center2[0]) > cell_width or abs(center1[1] - center2[1]) > cell_height:
-                        mid_point = (
-                            (center1[0] + center2[0]) / 2,
-                            (center1[1] + center2[1]) / 2
-                        )
-                        route.extend([center1, mid_point, center2])
-                    else:
-                        route.extend([center1, center2])
-                
-                routed_nets.append({
-                    'id': net.get('id', f'net_{len(routed_nets)}'),
-                    'pins': net.get('pins', []),
-                    'route': route,
-                    'weight': net.get('weight', 1.0)
-                })
+        positioned_components = []
+        current_x, current_y, row_max_height = 0, 0, 0
+        for idx, (comp, (comp_width, comp_height)) in enumerate(comp_with_size):
+            logger.info(f"排布组件{idx}: x={current_x}, y={current_y}, w={comp_width}, h={comp_height}, die_w={width}, die_h={height}")
+            if current_x + comp_width > width:
+                # 换行
+                current_x = 0
+                current_y += row_max_height + SPACING
+                row_max_height = 0
+            if current_y + comp_height > height:
+                logger.warning(f"组件{idx}放不下，跳出排布循环")
+                break
+            positioned_components.append({
+                'id': comp.get('id', f'comp_{idx}'),
+                'type': comp.get('type', 'L'),
+                'x': current_x,
+                'y': current_y,
+                'width': comp_width,
+                'height': comp_height,
+                'orientation': 'N'
+            })
+            current_x += comp_width + SPACING
+            row_max_height = max(row_max_height, comp_height)
         
         # 7. 计算布局指标
-        total_component_area = sum(c['width'] * c['height'] for c in positioned_components)
+        total_component_area = sum(
+            comp['width'] * comp['height']
+            for comp in positioned_components
+        )
+        
         density = total_component_area / area if area > 0 else 0
         
         # 8. 构建布局数据
         layout = {
             'components': positioned_components,
-            'nets': routed_nets,
+            'nets': [],  # 3. 取消布线
             'die_area': die_area,
             'cell_library': design_spec.get('cell_library', {}),
             'density': density,
-            'congestion': sum(n['weight'] for n in routed_nets) / len(routed_nets) if routed_nets else 0,
+            'congestion': 0.0,
             'power': 0.8,  # 初始估计值
             'current': 0.08  # 初始估计值
         }

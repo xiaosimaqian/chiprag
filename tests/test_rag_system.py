@@ -2,39 +2,23 @@ import unittest
 import json
 from pathlib import Path
 from run_rag import RAGController
+import logging
 
 class TestRAGSystem(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        """测试前的准备工作"""
-        cls.config = {
-            'knowledge_base': {
-                'path': '/tmp/chiprag_test',
-                'format': 'json',
-                'text_path': '/tmp/chiprag_test/text',
-                'image_path': '/tmp/chiprag_test/images',
-                'structured_data_path': '/tmp/chiprag_test/structured',
-                'graph_path': '/tmp/chiprag_test/graph',
-                'layout_experience_path': '/tmp/chiprag_test/layout',
-                'cache_dir': '/tmp/chiprag_test/cache'
-            },
-            'hierarchy_config': {
-                'max_depth': 3,
-                'min_components': 2,
-                'max_components': 10,
-                'similarity_threshold': 0.8
-            },
-            'llm_config': {
-                'base_url': 'http://localhost:8000',
-                'model_name': 'gpt-3.5-turbo',
-                'temperature': 0.7,
-                'max_tokens': 1000,
-                'top_p': 0.9,
-                'frequency_penalty': 0.0,
-                'presence_penalty': 0.0
-            }
-        }
+        """设置测试环境"""
+        cls.logger = logging.getLogger('CHIPRAG_System_Test')
+        cls.logger.info("开始步骤: 初始化测试环境")
+        
+        # 加载配置
+        with open('configs/system.json', 'r') as f:
+            cls.config = json.load(f)
+        
+        # 初始化RAG系统
         cls.controller = RAGController(cls.config)
+        
+        cls.logger.info("测试环境初始化完成")
         
     def test_system_initialization(self):
         """测试系统初始化"""

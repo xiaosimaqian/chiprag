@@ -14,6 +14,8 @@ from modules.evaluation.layout_quality_evaluator import LayoutQualityEvaluator
 from modules.evaluation.constraint_satisfaction_evaluator import ConstraintSatisfactionEvaluator
 from modules.evaluation.multi_objective_evaluator import MultiObjectiveEvaluator
 from modules.evaluation.quality_evaluator import QualityEvaluator
+from modules.knowledge.knowledge_base import KnowledgeBase
+from modules.utils.llm_manager import LLMManager
 
 logger = logging.getLogger(__name__)
 
@@ -21,65 +23,24 @@ class TestCHIPRAGSystem(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """设置测试环境"""
-        cls.config = {
-            'knowledge_base': {
-                'path': '/tmp/chiprag_test',
-                'format': 'json',
-                'text_path': '/tmp/chiprag_test/text',
-                'image_path': '/tmp/chiprag_test/images',
-                'structured_data_path': '/tmp/chiprag_test/structured',
-                'graph_path': '/tmp/chiprag_test/graph',
-                'layout_experience_path': '/tmp/chiprag_test/layout',
-                'cache_dir': '/tmp/chiprag_test/cache'
-            },
-            'layout_config': {
-                'max_iterations': 100,
-                'population_size': 50,
-                'mutation_rate': 0.1,
-                'crossover_rate': 0.8
-            },
-            'hierarchy_config': {
-                'max_depth': 3,
-                'min_components': 2,
-                'max_components': 10,
-                'similarity_threshold': 0.8
-            },
-            'llm_config': {
-                'base_url': 'http://localhost:8000',
-                'model_name': 'gpt-3.5-turbo',
-                'temperature': 0.7,
-                'max_tokens': 1000,
-                'top_p': 0.9,
-                'frequency_penalty': 0.0,
-                'presence_penalty': 0.0
-            },
-            'embedding_config': {
-                'model_name': 'bert-base-uncased',
-                'max_length': 512,
-                'device': 'cpu'
-            },
-            'evaluation_config': {
-                'metrics': ['wirelength', 'congestion', 'timing'],
-                'weights': {
-                    'wirelength': 0.4,
-                    'congestion': 0.3,
-                    'timing': 0.3
-                },
-                'thresholds': {
-                    'wirelength': 1000,
-                    'congestion': 0.8,
-                    'timing': 10
-                }
-            }
-        }
+        cls.logger = logging.getLogger('CHIPRAG_System_Test')
+        cls.logger.info("开始步骤: 初始化测试环境")
         
-        # 初始化 LLM 管理器
-        from modules.utils.llm_manager import LLMManager
-        cls.llm_manager = LLMManager(cls.config['llm_config'])
+        # 加载配置
+        config_path = os.path.join(os.path.dirname(__file__), '..', 'configs', 'system.json')
+        with open(config_path, 'r') as f:
+            cls.config = json.load(f)
+        
+        # 初始化RAG系统
+        cls.rag_system = RAGSystem(cls.config)
         
         # 初始化知识库
-        from modules.knowledge.knowledge_base import KnowledgeBase
-        cls.knowledge_base = KnowledgeBase(cls.config['knowledge_base'])
+        cls.knowledge_base = KnowledgeBase(cls.config.get('knowledge_base', {}))
+        
+        # 初始化LLM管理器
+        cls.llm_manager = LLMManager(cls.config.get('llm', {}))
+        
+        cls.logger.info("测试环境初始化完成")
         
         # 初始化布局生成器
         from modules.core.layout_generator import LayoutGenerator
@@ -96,15 +57,6 @@ class TestCHIPRAGSystem(unittest.TestCase):
         from modules.utils.embedding_manager import EmbeddingManager
         cls.embedding_manager = EmbeddingManager(cls.config['embedding_config'])
         cls.evaluator = LayoutQualityEvaluator(cls.config['evaluation_config'])
-        
-        # 初始化系统
-        cls.rag_system = RAGSystem(
-            knowledge_base=cls.knowledge_base,
-            llm_manager=cls.llm_manager,
-            embedding_manager=cls.embedding_manager,
-            layout_generator=cls.layout_generator,
-            evaluator=cls.evaluator
-        )
         
         # 初始化基准测试加载器
         cls.benchmark_loader = BenchmarkLoader(os.path.join(os.path.dirname(__file__), '..', 'data', 'designs', 'ispd_2015_contest_benchmark'))

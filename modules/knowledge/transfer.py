@@ -13,6 +13,29 @@ class KnowledgeTransfer:
         self.config = config
         logger.info("知识迁移器初始化完成")
         
+    def _generate_default_knowledge(self, node: Node) -> Dict[str, Any]:
+        """生成默认知识
+        
+        Args:
+            node: 节点
+            
+        Returns:
+            默认知识
+        """
+        return {
+            'features': {
+                'text': [],
+                'image': [],
+                'graph': []
+            },
+            'content': {
+                'description': f"这是{node.name}的默认描述",
+                'properties': {},
+                'relationships': []
+            },
+            'granularity': node.level
+        }
+
     def transfer(self, source_node: Node, target_node: Node) -> Dict[str, Any]:
         """迁移知识
         
@@ -29,8 +52,10 @@ class KnowledgeTransfer:
             # 获取源节点的知识
             source_knowledge = source_node.get_knowledge()
             if not source_knowledge:
-                logger.warning(f"源节点 {source_node.name} 没有知识")
-                return {}
+                # 如果源节点没有知识，生成默认知识
+                source_knowledge = self._generate_default_knowledge(source_node)
+                source_node.add_knowledge(source_knowledge)
+                logger.info(f"为源节点 {source_node.name} 生成默认知识")
                 
             # 根据目标节点的层级调整知识
             transferred_knowledge = self._adjust_knowledge(source_knowledge, target_node.level)

@@ -48,7 +48,23 @@ class TestEvaluationSystem(unittest.TestCase):
                 }
             },
             'evaluator_config': {
-                'metrics': ['wirelength', 'congestion', 'timing'],
+                'metrics': {
+                    'wirelength': {
+                        'type': 'minimize',
+                        'weight': 0.4,
+                        'threshold': 1000
+                    },
+                    'congestion': {
+                        'type': 'minimize',
+                        'weight': 0.3,
+                        'threshold': 0.8
+                    },
+                    'timing': {
+                        'type': 'minimize',
+                        'weight': 0.3,
+                        'threshold': 10
+                    }
+                },
                 'weights': {
                     'wirelength': 0.4,
                     'congestion': 0.3,

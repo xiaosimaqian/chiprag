@@ -1,92 +1,131 @@
-import torch
-import torch.nn as nn
-from transformers import BertModel, BertTokenizer
-import logging
-from typing import Dict, Any, List, Union
-import gc
+"""
+BERT文本编码器模块
+"""
+
 import os
+import json
+import logging
+import torch
+import numpy as np
 import ssl
 import certifi
 import requests
-import json
-from pathlib import Path
+from typing import List, Dict, Any, Union
+from transformers import AutoTokenizer, AutoModel
+from modules.encoders.base_encoder import BaseEncoder
 
-logger = logging.getLogger(__name__)
-
-class BertTextEncoder(nn.Module):
-    """基于BERT的文本编码器"""
+class BertTextEncoder(BaseEncoder):
+    """BERT文本编码器"""
     
     def __init__(self, config: Dict[str, Any]):
-        """
-        初始化BERT文本编码器
+        """初始化BERT文本编码器
         
         Args:
-            config: 配置字典
+            config: 配置参数字典
         """
-        super().__init__()
-        self.model_name = config.get('model_name', 'bert-base-uncased')
-        self.max_length = config.get('max_length', 512)
-        self.batch_size = config.get('batch_size', 32)
-        self.model_path = config.get('model_path', 'models/bert')
-        self.ollama_url = config.get('ollama_url', 'http://localhost:11434')
-        self.use_ollama = config.get('use_ollama', False)
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("初始化BERT文本编码器")
+        super().__init__(config)
         
-        # 检查CUDA是否可用
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        logger.info(f"使用设备: {self.device}")
+        # 初始化模型
+        self._init_model()
         
-        # 设置SSL验证
-        ssl_context = ssl.create_default_context(cafile=certifi.where())
-        os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
-        
-        if self.use_ollama:
-            self._init_ollama()
-        else:
-            self._init_local_model()
+    def _init_model(self):
+        """初始化模型"""
+        try:
+            # 获取配置
+            self.model_path = self.config.get('model_path', 'bert-base-chinese')
+            self.max_length = self.config.get('max_length', 512)
+            self.batch_size = self.config.get('batch_size', 32)
             
+            # 加载系统配置
+            system_config_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'configs', 'system.json')
+            try:
+                with open(system_config_path, 'r') as f:
+                    system_config = json.load(f)
+                    self.model_path = system_config.get('text_encoder', {}).get('model_path', self.model_path)
+            except Exception as e:
+                self.logger.warning(f"加载系统配置失败: {str(e)}")
+            
+            # 初始化模型
+            try:
+                self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+                self.model = AutoModel.from_pretrained(self.model_path)
+                self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                self.model.to(self.device)
+                self.logger.info(f"BERT模型加载成功: {self.model_path}")
+            except Exception as e:
+                self.logger.error(f"BERT模型加载失败: {str(e)}")
+                raise
+            
+            self.model_name = self.config.get('model_name', 'bert-base-chinese')
+            self.ollama_url = self.config.get('ollama_url', 'http://localhost:11434')
+            self.use_ollama = self.config.get('use_ollama', False)
+            self.ollama_model = self.config.get('ollama_model', 'llama2')
+            
+            # 设置SSL验证
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
+            
+            if self.use_ollama:
+                self._init_ollama()
+            else:
+                self._init_local_model()
+                
+        except Exception as e:
+            self.logger.error(f"初始化模型失败: {str(e)}")
+            raise
+        
     def _init_ollama(self):
         """初始化Ollama模型"""
         try:
-            # 检查Ollama服务是否可用
+            if not self.use_ollama:
+                return
+            
             response = requests.get(f"{self.ollama_url}/api/tags")
             if response.status_code != 200:
-                raise ConnectionError("无法连接到Ollama服务")
-                
-            # 获取模型信息
-            self.model_name = self.config.get('ollama_model', 'llama2')
-            logger.info(f"使用Ollama模型: {self.model_name}")
+                self.logger.warning(f"无法连接到Ollama服务: {self.ollama_url}")
+                self.use_ollama = False
+                return
             
+            available_models = [model['name'] for model in response.json()['models']]
+            if self.ollama_model not in available_models:
+                self.logger.warning(f"模型 {self.ollama_model} 不可用，可用模型: {available_models}")
+                self.use_ollama = False
+                return
+            
+            self.logger.info(f"成功初始化Ollama模型: {self.ollama_model}")
         except Exception as e:
-            logger.error(f"初始化Ollama失败: {str(e)}")
-            raise
+            self.logger.error(f"初始化Ollama模型失败: {str(e)}")
+            self.use_ollama = False
             
     def _init_local_model(self):
         """初始化本地模型"""
         try:
-            model_path = Path(self.model_path)
-            if not model_path.exists():
-                raise FileNotFoundError(f"模型路径不存在: {self.model_path}")
+            if not os.path.exists(self.model_path):
+                # 如果模型路径不存在，尝试从Hugging Face下载
+                from transformers import AutoTokenizer, AutoModel
                 
-            # 加载模型配置
-            config_path = model_path / 'config.json'
-            if not config_path.exists():
-                raise FileNotFoundError(f"模型配置文件不存在: {config_path}")
+                self.logger.info(f"从Hugging Face下载模型到 {self.model_path}")
+                self.tokenizer = AutoTokenizer.from_pretrained("bert-base-chinese")
+                self.model = AutoModel.from_pretrained("bert-base-chinese")
                 
-            with open(config_path) as f:
-                model_config = json.load(f)
+                # 保存模型到本地
+                os.makedirs(self.model_path, exist_ok=True)
+                self.tokenizer.save_pretrained(self.model_path)
+                self.model.save_pretrained(self.model_path)
+            else:
+                # 加载本地模型
+                from transformers import AutoTokenizer, AutoModel
+                self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+                self.model = AutoModel.from_pretrained(self.model_path)
                 
-            # 加载模型权重
-            weights_path = model_path / 'pytorch_model.bin'
-            if not weights_path.exists():
-                raise FileNotFoundError(f"模型权重文件不存在: {weights_path}")
-                
-            # 加载模型
-            self.model = torch.load(weights_path, map_location=self.device)
-            self.model.eval()
-            logger.info(f"成功加载本地模型: {self.model_path}")
+            # 将模型移到指定设备
+            self.model = self.model.to(self.device)
+            self.logger.info(f"成功加载本地模型: {self.model_path}")
             
         except Exception as e:
-            logger.error(f"加载本地模型失败: {str(e)}")
+            self.logger.error(f"初始化本地模型失败: {str(e)}")
             raise
             
     def _validate_text(self, text: str) -> None:
@@ -196,91 +235,103 @@ class BertTextEncoder(nn.Module):
         self._validate_text(text)
         return self.forward([text])[0]
         
-    def encode(self, text: str) -> torch.Tensor:
+    def encode(self, text: Union[str, List[str]]) -> torch.Tensor:
         """编码文本
         
         Args:
-            text: 输入文本
-            
-        Returns:
-            torch.Tensor: 文本编码向量
-        """
-        try:
-            if self.use_ollama:
-                return self._encode_with_ollama(text)
-            else:
-                return self._encode_with_local_model(text)
-                
-        except Exception as e:
-            logger.error(f"文本编码失败: {str(e)}")
-            raise
-            
-    def _encode_with_ollama(self, text: str) -> torch.Tensor:
-        """使用Ollama进行编码
-        
-        Args:
-            text: 输入文本
-            
-        Returns:
-            torch.Tensor: 文本编码向量
-        """
-        try:
-            # 调用Ollama API
-            response = requests.post(
-                f"{self.ollama_url}/api/embeddings",
-                json={
-                    "model": self.model_name,
-                    "prompt": text
-                }
-            )
-            
-            if response.status_code != 200:
-                raise RuntimeError(f"Ollama API调用失败: {response.text}")
-                
-            # 解析响应
-            result = response.json()
-            embedding = torch.tensor(result['embedding'], device=self.device)
-            
-            return embedding
-            
-        except Exception as e:
-            logger.error(f"Ollama编码失败: {str(e)}")
-            raise
-            
-    def _encode_with_local_model(self, text: str) -> torch.Tensor:
-        """使用本地模型进行编码
-        
-        Args:
-            text: 输入文本
+            text: 输入文本或文本列表
             
         Returns:
             torch.Tensor: 文本编码向量
         """
         try:
             # 预处理文本
-            inputs = self._preprocess_text(text)
+            text = self._preprocess_text(text)
             
-            # 编码
-            with torch.no_grad():
-                outputs = self.model(**inputs)
-                return outputs.last_hidden_state.mean(dim=1)
+            if self.use_ollama:
+                return self._encode_with_ollama(text)
+            else:
+                return self._encode_with_local_model(text)
                 
         except Exception as e:
-            logger.error(f"本地模型编码失败: {str(e)}")
-            raise
+            self.logger.error(f"文本编码失败: {str(e)}")
+            return torch.zeros(768)  # 返回零向量
             
-    def _preprocess_text(self, text: str) -> Dict[str, torch.Tensor]:
+    def _encode_with_ollama(self, text: str) -> torch.Tensor:
+        """使用Ollama编码文本
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            torch.Tensor: 文本编码
+        """
+        try:
+            # 调用Ollama API
+            response = requests.post(
+                f"{self.ollama_url}/api/embeddings",
+                json={
+                    "model": self.ollama_model,
+                    "prompt": text
+                }
+            )
+            
+            if response.status_code != 200:
+                raise ValueError(f"Ollama API调用失败: {response.text}")
+                
+            # 获取嵌入向量
+            embedding = torch.tensor(response.json().get('embedding', []), device=self.device)
+            
+            return embedding
+            
+        except Exception as e:
+            self.logger.error(f"Ollama编码失败: {str(e)}")
+            return torch.zeros(768)
+            
+    def _encode_with_local_model(self, text: str) -> torch.Tensor:
+        """使用本地模型编码文本
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            torch.Tensor: 文本编码
+        """
+        try:
+            # 对文本进行编码
+            inputs = self.tokenizer(
+                text,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512
+            )
+            
+            # 获取模型输出
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                
+            # 使用[CLS]标记的输出作为文本表示
+            embeddings = outputs.last_hidden_state[:, 0, :]
+            
+            return embeddings.mean(dim=0)  # 返回第一个句子的编码
+            
+        except Exception as e:
+            self.logger.error(f"本地模型编码失败: {str(e)}")
+            return torch.zeros(768)
+            
+    def _preprocess_text(self, text: str) -> str:
         """预处理文本
         
         Args:
             text: 输入文本
             
         Returns:
-            Dict[str, torch.Tensor]: 预处理后的输入
+            str: 预处理后的文本
         """
-        # 实现文本预处理逻辑
-        # 这里需要根据具体使用的模型来实现
-        pass
+        # 这里可以添加文本预处理步骤
+        # 例如：去除特殊字符、标准化等
+        return text.strip()
         
     def encode_texts(self, texts: List[str]) -> torch.Tensor:
         """
@@ -295,31 +346,31 @@ class BertTextEncoder(nn.Module):
         return self.forward(texts)
         
     def compute_similarity(self, text1: str, text2: str) -> float:
-        """计算两段文本的相似度
+        """计算两个文本的相似度
         
         Args:
-            text1: 第一段文本
-            text2: 第二段文本
+            text1: 第一个文本
+            text2: 第二个文本
             
         Returns:
-            float: 相似度分数
+            float: 相似度得分
         """
         try:
             # 编码文本
-            encoding1 = self.encode(text1)
-            encoding2 = self.encode(text2)
+            embedding1 = self.encode(text1)
+            embedding2 = self.encode(text2)
             
             # 计算余弦相似度
             similarity = torch.nn.functional.cosine_similarity(
-                encoding1,
-                encoding2
+                embedding1,
+                embedding2
             )
             
             return similarity.item()
             
         except Exception as e:
-            logger.error(f"计算文本相似度失败: {str(e)}")
-            raise
+            self.logger.error(f"计算相似度失败: {str(e)}")
+            return 0.0
         
     def save_model(self, path: str):
         """保存模型
@@ -330,10 +381,10 @@ class BertTextEncoder(nn.Module):
         try:
             if not self.use_ollama:
                 torch.save(self.model, path)
-                logger.info(f"模型已保存到: {path}")
+                self.logger.info(f"模型已保存到: {path}")
                 
         except Exception as e:
-            logger.error(f"保存模型失败: {str(e)}")
+            self.logger.error(f"保存模型失败: {str(e)}")
             raise
         
     @classmethod
@@ -353,5 +404,48 @@ class BertTextEncoder(nn.Module):
         model.tokenizer = checkpoint['tokenizer']
         model.max_length = checkpoint['max_length']
         model.batch_size = checkpoint['batch_size']
-        logger.info(f"模型已从 {path} 加载")
-        return model 
+        model.logger.info(f"模型已从 {path} 加载")
+        return model
+
+    def preprocess(self, text: Union[str, List[str]]) -> Dict[str, torch.Tensor]:
+        """预处理文本数据
+        
+        Args:
+            text: 输入文本或文本列表
+            
+        Returns:
+            Dict[str, torch.Tensor]: 预处理后的数据
+        """
+        if isinstance(text, str):
+            text = [text]
+            
+        # 对文本进行编码
+        encoded = self.tokenizer(
+            text,
+            padding=True,
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors='pt'
+        )
+        
+        # 将数据移动到指定设备
+        return {k: v.to(self.device) for k, v in encoded.items()}
+    
+    def batch_encode(self, texts: List[str]) -> torch.Tensor:
+        """批量编码文本
+        
+        Args:
+            texts: 文本列表
+            
+        Returns:
+            torch.Tensor: 编码后的向量
+        """
+        all_embeddings = []
+        
+        # 分批处理
+        for i in range(0, len(texts), self.batch_size):
+            batch_texts = texts[i:i + self.batch_size]
+            batch_embeddings = self.encode(batch_texts)
+            all_embeddings.append(batch_embeddings)
+            
+        return torch.cat(all_embeddings, dim=0) 
