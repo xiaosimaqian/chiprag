@@ -19,6 +19,13 @@ class MultimodalFusion:
         self.image_weight = config.get('image_weight', 0.3)
         self.graph_weight = config.get('graph_weight', 0.3)
         
+        # 添加weights属性
+        self.weights = {
+            'text': self.text_weight,
+            'image': self.image_weight,
+            'graph': self.graph_weight
+        }
+        
         # 验证权重和为1
         total_weight = self.text_weight + self.image_weight + self.graph_weight
         if not np.isclose(total_weight, 1.0):
@@ -26,6 +33,13 @@ class MultimodalFusion:
             self.text_weight /= total_weight
             self.image_weight /= total_weight
             self.graph_weight /= total_weight
+            
+            # 更新weights属性
+            self.weights = {
+                'text': self.text_weight,
+                'image': self.image_weight,
+                'graph': self.graph_weight
+            }
             
         logger.info("多模态融合器初始化完成")
         
@@ -42,12 +56,15 @@ class MultimodalFusion:
             features = features.reshape(1, -1)
         return normalize(features, norm='l2', axis=1).squeeze()
         
-    def _validate_features(self, features: np.ndarray, modality: str) -> None:
+    def _validate_features(self, features: np.ndarray, modality: str) -> np.ndarray:
         """验证特征向量的有效性
         
         Args:
             features: 特征向量
             modality: 模态名称
+            
+        Returns:
+            验证和修复后的特征向量
             
         Raises:
             ValueError: 特征向量无效
@@ -56,9 +73,19 @@ class MultimodalFusion:
             raise ValueError(f"{modality}特征必须是numpy数组")
         if features.size == 0:
             raise ValueError(f"{modality}特征不能为空")
+        
+        # 检查NaN值并替换为0
         if np.isnan(features).any():
-            raise ValueError(f"{modality}特征包含NaN值")
+            logger.warning(f"{modality}特征包含NaN值，将替换为0")
+            features = np.nan_to_num(features, nan=0.0)
             
+        # 检查无穷值并替换为0
+        if np.isinf(features).any():
+            logger.warning(f"{modality}特征包含无穷值，将替换为0")
+            features = np.nan_to_num(features, posinf=0.0, neginf=0.0)
+            
+        return features
+        
     def _transform_features(self, features: np.ndarray, target_dim: int) -> np.ndarray:
         """转换特征维度
         
@@ -119,11 +146,11 @@ class MultimodalFusion:
             
             # 验证特征
             if text_features.size > 0:
-                self._validate_features(text_features, 'text')
+                text_features = self._validate_features(text_features, 'text')
             if image_features.size > 0:
-                self._validate_features(image_features, 'image')
+                image_features = self._validate_features(image_features, 'image')
             if graph_features.size > 0:
-                self._validate_features(graph_features, 'graph')
+                graph_features = self._validate_features(graph_features, 'graph')
                 
             # 计算有效模态的权重
             valid_modalities = []
@@ -150,7 +177,21 @@ class MultimodalFusion:
             target_dim = 512  # 使用统一的目标维度
             transformed_features = []
             for features in normalized_features:
-                transformed_features.append(self._transform_features(features, target_dim))
+                try:
+                    transformed = self._transform_features(features, target_dim)
+                    if transformed.size > 0:  # 确保转换后的特征不为空
+                        transformed_features.append(transformed)
+                except Exception as e:
+                    logger.warning(f"特征转换失败: {str(e)}")
+                    continue
+                
+            # 检查是否有有效的转换特征
+            if not transformed_features:
+                logger.warning("没有有效的转换特征，返回零向量")
+                return {
+                    'features': np.zeros(target_dim).tolist(),
+                    'metadata': {}
+                }
                 
             # 加权融合
             fused_features = np.zeros_like(transformed_features[0])

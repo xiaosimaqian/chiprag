@@ -48,6 +48,9 @@ class LayoutGenerator(nn.Module):
         self.config = config
         self.layout_config = LayoutConfig(**config.get('layout_config', {}))
         
+        # 初始化LLM管理器
+        self.llm_manager = config.get('llm_manager')
+        
         # 初始化网络层
         self._init_network()
         
@@ -835,13 +838,13 @@ class LayoutGenerator(nn.Module):
             if current_y + comp_height > height:
                 logger.warning(f"组件{idx}放不下，跳出排布循环")
                 break
-            positioned_components.append({
+                positioned_components.append({
                 'id': comp.get('id', f'comp_{idx}'),
                 'type': comp.get('type', 'L'),
                 'x': current_x,
                 'y': current_y,
-                'width': comp_width,
-                'height': comp_height,
+                    'width': comp_width,
+                    'height': comp_height,
                 'orientation': 'N'
             })
             current_x += comp_width + SPACING

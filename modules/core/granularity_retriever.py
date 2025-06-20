@@ -21,7 +21,14 @@ class GranularityRetriever(BaseRetriever):
         self.levels = config.get('levels', ['system', 'module', 'component'])
         super().__init__(config)
         self.embedding_manager = EmbeddingManager(config.get('embedding', {}))
-        self.llm_manager = LLMManager(config.get('llm', {}))
+        
+        # 修复LLM配置类型检查
+        llm_config = config.get('llm', {})
+        if isinstance(llm_config, dict):
+            self.llm_manager = LLMManager(llm_config)
+        else:
+            logger.warning(f"LLM配置格式错误，期望字典但得到: {type(llm_config)}")
+            self.llm_manager = LLMManager({})
         
         # 初始化知识迁移和融合
         self.knowledge_transfer = KnowledgeTransfer(config)
@@ -221,8 +228,37 @@ class MultiGranularityRetrieval:
             results = self.retrieve(query)
             
             # 计算相关文档集合
-            relevant_docs = set(doc['id'] for doc in ground_truth)
-            retrieved_docs = set(doc['id'] for doc in results)
+            relevant_docs = set()
+            for doc in ground_truth:
+                if isinstance(doc, dict) and 'id' in doc:
+                    relevant_docs.add(doc['id'])
+                elif hasattr(doc, 'id'):
+                    relevant_docs.add(doc.id)
+                else:
+                    # 如果doc是Node对象或其他类型，尝试获取id属性
+                    try:
+                        if hasattr(doc, '__getitem__'):
+                            relevant_docs.add(doc['id'])
+                        else:
+                            relevant_docs.add(str(doc))
+                    except:
+                        relevant_docs.add(str(doc))
+            
+            retrieved_docs = set()
+            for doc in results:
+                if isinstance(doc, dict) and 'id' in doc:
+                    retrieved_docs.add(doc['id'])
+                elif hasattr(doc, 'id'):
+                    retrieved_docs.add(doc.id)
+                else:
+                    # 如果doc是Node对象或其他类型，尝试获取id属性
+                    try:
+                        if hasattr(doc, '__getitem__'):
+                            retrieved_docs.add(doc['id'])
+                        else:
+                            retrieved_docs.add(str(doc))
+                    except:
+                        retrieved_docs.add(str(doc))
             
             # 计算评估指标
             if not retrieved_docs:

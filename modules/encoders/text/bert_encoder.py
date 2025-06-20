@@ -14,6 +14,15 @@ from typing import List, Dict, Any, Union
 from transformers import AutoTokenizer, AutoModel
 from modules.encoders.base_encoder import BaseEncoder
 
+def get_system_config_path():
+    abs_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../configs/system.json'))
+    if os.path.exists(abs_path):
+        return abs_path
+    alt_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../configs/system.json'))
+    if os.path.exists(alt_path):
+        return alt_path
+    raise FileNotFoundError(f"未找到系统配置文件，建议放在: {abs_path}")
+
 class BertTextEncoder(BaseEncoder):
     """BERT文本编码器"""
     
@@ -37,15 +46,12 @@ class BertTextEncoder(BaseEncoder):
             self.model_path = self.config.get('model_path', 'bert-base-chinese')
             self.max_length = self.config.get('max_length', 512)
             self.batch_size = self.config.get('batch_size', 32)
-            
-            # 加载系统配置
-            system_config_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'configs', 'system.json')
-            try:
-                with open(system_config_path, 'r') as f:
-                    system_config = json.load(f)
-                    self.model_path = system_config.get('text_encoder', {}).get('model_path', self.model_path)
-            except Exception as e:
-                self.logger.warning(f"加载系统配置失败: {str(e)}")
+        
+            # 读取系统配置
+            system_config_path = get_system_config_path()
+            with open(system_config_path, 'r') as f:
+                system_config = json.load(f)
+                self.model_path = system_config.get('text_encoder', {}).get('model_path', self.model_path)
             
             # 初始化模型
             try:
@@ -235,16 +241,37 @@ class BertTextEncoder(BaseEncoder):
         self._validate_text(text)
         return self.forward([text])[0]
         
-    def encode(self, text: Union[str, List[str]]) -> torch.Tensor:
+    def encode(self, text: Union[str, List[str], Dict]) -> torch.Tensor:
         """编码文本
         
         Args:
-            text: 输入文本或文本列表
+            text: 输入文本、文本列表或包含文本的字典
             
         Returns:
             torch.Tensor: 文本编码向量
         """
         try:
+            # 处理不同类型的输入
+            if isinstance(text, dict):
+                # 如果是字典，尝试提取文本内容
+                if 'text' in text:
+                    text = text['text']
+                elif 'content' in text:
+                    text = text['content']
+                else:
+                    # 如果找不到文本字段，使用字典的字符串表示
+                    text = str(text)
+            elif isinstance(text, list):
+                # 如果是列表，取第一个元素
+                if text:
+                    text = text[0] if isinstance(text[0], str) else str(text[0])
+                else:
+                    text = ""
+            
+            # 确保text是字符串
+            if not isinstance(text, str):
+                text = str(text)
+            
             # 预处理文本
             text = self._preprocess_text(text)
             
@@ -359,7 +386,7 @@ class BertTextEncoder(BaseEncoder):
             # 编码文本
             embedding1 = self.encode(text1)
             embedding2 = self.encode(text2)
-            
+        
             # 计算余弦相似度
             similarity = torch.nn.functional.cosine_similarity(
                 embedding1,
@@ -405,7 +432,7 @@ class BertTextEncoder(BaseEncoder):
         model.max_length = checkpoint['max_length']
         model.batch_size = checkpoint['batch_size']
         model.logger.info(f"模型已从 {path} 加载")
-        return model
+        return model 
 
     def preprocess(self, text: Union[str, List[str]]) -> Dict[str, torch.Tensor]:
         """预处理文本数据

@@ -126,7 +126,7 @@ class KnowledgeBase:
         except Exception as e:
             logger.error(f"初始化知识库失败: {str(e)}")
             raise
-        
+            
     def _load_data(self) -> List[Dict]:
         """加载知识库数据
         
@@ -430,11 +430,26 @@ class KnowledgeBase:
             List[Dict[str, Any]]: 相似案例列表
         """
         try:
-            # 加载知识库数据
-            with open(self.data_file, 'rb') as f:
-                cases = pickle.load(f)
-                
+            # 优先使用内存中的cases
+            cases = self.cases
+            
+            # 如果内存中没有数据，尝试从文件加载
             if not cases:
+                logger.info("内存中没有案例数据，尝试从文件加载")
+                try:
+                    if os.path.exists(self.data_file):
+                        with open(self.data_file, 'rb') as f:
+                            cases = pickle.load(f)
+                        logger.info(f"从文件加载了 {len(cases)} 个案例")
+                    else:
+                        logger.info("数据文件不存在")
+                        return []
+                except Exception as e:
+                    logger.warning(f"从文件加载数据失败: {str(e)}")
+                    return []
+            
+            if not cases:
+                logger.info("知识库中没有案例数据")
                 return []
                 
             # 计算相似度
@@ -466,7 +481,7 @@ class KnowledgeBase:
             return [case for case, _ in similarities[:top_k]]
             
         except Exception as e:
-            self.logger.error(f"获取相似案例失败: {str(e)}")
+            logger.error(f"获取相似案例失败: {str(e)}")
             return []
             
     def _compute_feature_similarity(self, query: Dict[str, Any], case: Dict[str, Any]) -> float:
@@ -517,7 +532,7 @@ class KnowledgeBase:
             return 0.6 * numerical_sim + 0.4 * text_sim
             
         except Exception as e:
-            self.logger.error(f"计算特征相似度失败: {str(e)}")
+            logger.error(f"计算特征相似度失败: {str(e)}")
             return 0.0
             
     def _compute_hierarchy_similarity(self, query: Dict[str, Any], case: Dict[str, Any]) -> float:
@@ -554,7 +569,7 @@ class KnowledgeBase:
             return 0.6 * level_sim + 0.4 * module_sim
             
         except Exception as e:
-            self.logger.error(f"计算层次结构相似度失败: {str(e)}")
+            logger.error(f"计算层次结构相似度失败: {str(e)}")
             return 0.0
             
     def _compute_constraint_similarity(self, query: Dict[str, Any], case: Dict[str, Any]) -> float:
@@ -611,9 +626,9 @@ class KnowledgeBase:
             return 0.4 * type_sim + 0.6 * value_sim
             
         except Exception as e:
-            self.logger.error(f"计算约束相似度失败: {str(e)}")
+            logger.error(f"计算约束相似度失败: {str(e)}")
             return 0.0
-
+        
     def hierarchical_decomposition(self, design_info: Dict) -> Dict:
         """对设计进行层次化分解
         
@@ -758,7 +773,7 @@ class KnowledgeBase:
         Args:
             case: 测试用例信息
         """
-        self.logger.info(f"开始构建知识库: {case['name']}")
+        logger.info(f"开始构建知识库: {case['name']}")
         
         # 构建文本知识库
         self._build_text_kb(case)
@@ -772,7 +787,7 @@ class KnowledgeBase:
         # 构建图知识库
         self._build_graph_kb(case)
         
-        self.logger.info("知识库构建完成")
+        logger.info("知识库构建完成")
         
     def _build_text_kb(self, case: Dict):
         """构建文本知识库

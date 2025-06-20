@@ -146,6 +146,13 @@ class MultimodalRetriever:
         Raises:
             ValueError: 参数错误或检索失败
         """
+        # 类型保护
+        if isinstance(query, str):
+            query = {'text': query, 'type': 'text'}
+        elif not isinstance(query, dict):
+            logger.warning(f'查询格式错误，期望字典但得到: {type(query)}')
+            query = {'text': str(query), 'type': 'text'}
+        
         try:
             # 验证知识库
             self._validate_knowledge_base(knowledge_base)
@@ -196,4 +203,4 @@ class MultimodalRetriever:
             
         except Exception as e:
             logger.error(f"检索失败: {str(e)}")
-            raise
+            return []

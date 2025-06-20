@@ -447,6 +447,9 @@ class HierarchicalDecompositionManager:
                     if 'patterns' in item['component']:
                         hierarchy['patterns'].extend(item['component']['patterns'])
             
+            # 4. 计算最大深度
+            hierarchy['max_depth'] = len(hierarchy['levels'])
+            
             return hierarchy
             
         except Exception as e:

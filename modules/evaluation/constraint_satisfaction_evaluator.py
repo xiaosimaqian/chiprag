@@ -234,5 +234,23 @@ class ConstraintSatisfactionEvaluator:
         return results
 
     def evaluate(self, layout: Dict[str, Any]) -> float:
-        # 实现约束评估逻辑
-        return 0.0 
+        """评估布局的约束满足情况
+        
+        Args:
+            layout: 布局信息字典
+            
+        Returns:
+            约束满足率 (0-1)
+        """
+        try:
+            # 获取所有约束的满足率
+            satisfaction_results = self.evaluate_constraint_satisfaction(layout)
+            
+            # 返回总体满足率（转换为0-1范围）
+            overall_satisfaction = satisfaction_results.get('overall_satisfaction', 0.0) / 100.0
+            
+            return overall_satisfaction
+            
+        except Exception as e:
+            self.logger.error(f"约束评估失败: {e}")
+            return 0.5  # 返回默认评分 

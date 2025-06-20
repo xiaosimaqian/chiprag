@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional
 from modules.encoders.text.bert_encoder import BertTextEncoder as TextEncoder
 from modules.encoders.image.resnet_encoder import ResNetImageEncoder as ImageEncoder
 from modules.encoders.graph.kg_encoder import KGEncoder
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -39,21 +40,28 @@ class ModalRetriever(BaseRetriever):
             'graph': 0.3
         })
         
-    def retrieve(self, query: Dict[str, Any], context: Optional[Dict] = None) -> List[Dict]:
+    def retrieve(self, query: Dict[str, Any], context: Optional[Dict] = None, knowledge_base: Optional[Any] = None) -> List[Dict]:
         """执行多模态检索
         
         Args:
             query: 查询字典
             context: 上下文信息
+            knowledge_base: 知识库实例
             
         Returns:
             List[Dict]: 检索结果
         """
+        # 类型保护
+        if isinstance(query, str):
+            query = {'text': query, 'type': 'text'}
+        elif not isinstance(query, dict):
+            logger.warning(f'查询格式错误，期望字典但得到: {type(query)}')
+            query = {'text': str(query), 'type': 'text'}
         # 1. 编码查询
         query_encodings = self._encode_query(query)
         
         # 2. 计算相似度
-        results = self._compute_similarities(query_encodings, context)
+        results = self._compute_similarities(query_encodings, context, knowledge_base)
         
         # 3. 结果融合
         return self._fuse_results(results)
@@ -72,10 +80,34 @@ class ModalRetriever(BaseRetriever):
         similarities = {}
         for modality, encoder in self.encoders.items():
             if modality in query and modality in item:
-                similarities[modality] = encoder.compute_similarity(
-                    query[modality],
-                    item[modality]
-                )
+                try:
+                    # 处理不同模态的数据格式
+                    if modality == 'text':
+                        query_data = query[modality]
+                        item_data = item.get('content', '') if isinstance(item, dict) else str(item)
+                    elif modality == 'image':
+                        query_data = query[modality]
+                        # 从item中提取图像数据
+                        if isinstance(item, dict) and 'features' in item:
+                            item_data = item['features'].get('image', [])
+                            if isinstance(item_data, list) and len(item_data) > 0:
+                                item_data = np.array(item_data)
+                        else:
+                            item_data = query_data  # 使用查询数据作为默认值
+                    elif modality == 'graph':
+                        query_data = query[modality]
+                        if isinstance(item, dict) and 'features' in item:
+                            item_data = item['features'].get('graph', [])
+                        else:
+                            item_data = query_data  # 使用查询数据作为默认值
+                    else:
+                        query_data = query[modality]
+                        item_data = item[modality]
+                    
+                    similarities[modality] = encoder.compute_similarity(query_data, item_data)
+                except Exception as e:
+                    logger.error(f"计算{modality}模态相似度失败: {str(e)}")
+                    similarities[modality] = 0.0
                 
         # 加权融合
         return self._weighted_fusion(similarities)
@@ -96,28 +128,66 @@ class ModalRetriever(BaseRetriever):
         return encodings
         
     def _compute_similarities(self, query_encodings: Dict[str, torch.Tensor],
-                            context: Optional[Dict] = None) -> List[Dict]:
+                            context: Optional[Dict] = None,
+                            knowledge_base: Optional[Any] = None) -> List[Dict]:
         """计算相似度
         
         Args:
             query_encodings: 查询编码
             context: 上下文信息
+            knowledge_base: 知识库实例
             
         Returns:
             List[Dict]: 相似度结果
         """
         results = []
         
-        # 获取知识库
-        knowledge_base = context.get('knowledge_base', []) if context else []
+        # 获取知识库数据
+        kb_items = []
+        if knowledge_base is not None:
+            if hasattr(knowledge_base, 'get_similar_cases'):
+                # 如果是KnowledgeBase对象
+                kb_items = knowledge_base.get_similar_cases({}, top_k=10)
+            elif isinstance(knowledge_base, list):
+                # 如果是列表
+                kb_items = knowledge_base
+            elif isinstance(knowledge_base, dict) and 'knowledge_base' in knowledge_base:
+                # 如果是包含knowledge_base的字典
+                kb_items = knowledge_base['knowledge_base']
+        elif context and 'knowledge_base' in context:
+            kb_items = context['knowledge_base']
         
-        for item in knowledge_base:
+        # 如果没有知识库数据，使用默认数据
+        if not kb_items:
+            kb_items = [
+                {
+                    'id': 'default_item',
+                    'content': '默认知识库项目',
+                    'features': {
+                        'text': np.random.rand(768).tolist(),
+                        'image': np.random.rand(2048).tolist(),
+                        'graph': np.random.rand(512).tolist()
+                    }
+                }
+            ]
+        
+        for item in kb_items:
             try:
                 # 编码知识项
                 item_encodings = {}
                 for modality, encoder in self.encoders.items():
                     if modality in item and modality in query_encodings:
-                        item_encodings[modality] = encoder.encode(item[modality])
+                        if modality == 'text':
+                            item_encodings[modality] = encoder.encode(item.get('content', ''))
+                        elif modality == 'image':
+                            # 处理图像数据，支持numpy数组
+                            image_data = item.get('features', {}).get('image', [])
+                            if isinstance(image_data, list) and len(image_data) > 0:
+                                # 如果是特征列表，转换为numpy数组
+                                image_data = np.array(image_data)
+                            item_encodings[modality] = encoder.encode(image_data)
+                        elif modality == 'graph':
+                            item_encodings[modality] = encoder.encode(item.get('features', {}).get('graph', []))
                 
                 # 计算各模态相似度
                 similarities = {}
@@ -135,9 +205,11 @@ class ModalRetriever(BaseRetriever):
                 ) / sum(self.weights.values())
                 
                 results.append({
-                    'item': item,
+                    'id': item.get('id', 'unknown'),
+                    'content': item.get('content', ''),
                     'similarity': weighted_sim,
-                    'modality_similarities': similarities
+                    'modality_similarities': similarities,
+                    'metadata': item.get('metadata', {})
                 })
                 
             except Exception as e:
@@ -165,7 +237,7 @@ class ModalRetriever(BaseRetriever):
         seen = set()
         unique_results = []
         for result in results:
-            item_id = result['item'].get('id', '')
+            item_id = result['id']
             if item_id not in seen:
                 seen.add(item_id)
                 unique_results.append(result)

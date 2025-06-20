@@ -10,6 +10,15 @@ import json
 
 logger = logging.getLogger(__name__)
 
+def get_system_config_path():
+    abs_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../configs/system.json'))
+    if os.path.exists(abs_path):
+        return abs_path
+    alt_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../configs/system.json'))
+    if os.path.exists(alt_path):
+        return alt_path
+    raise FileNotFoundError(f"未找到系统配置文件，建议放在: {abs_path}")
+
 class KGEncoder(nn.Module):
     """知识图谱编码器"""
     
@@ -36,8 +45,8 @@ class KGEncoder(nn.Module):
         self.dropout = config.get('dropout', 0.1)
         self.batch_size = config.get('batch_size', 32)
         
-        # 从系统配置中读取设备设置
-        system_config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'configs', 'system.json')
+        # 读取系统配置
+        system_config_path = get_system_config_path()
         with open(system_config_path, 'r') as f:
             system_config = json.load(f)
             

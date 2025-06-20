@@ -8,8 +8,18 @@ from typing import Dict, Any, List, Union
 import gc
 import os
 import json
+import numpy as np
 
 logger = logging.getLogger(__name__)
+
+def get_system_config_path():
+    abs_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../configs/system.json'))
+    if os.path.exists(abs_path):
+        return abs_path
+    alt_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../configs/system.json'))
+    if os.path.exists(alt_path):
+        return alt_path
+    raise FileNotFoundError(f"未找到系统配置文件，建议放在: {abs_path}")
 
 class ResNetImageEncoder(nn.Module):
     """基于ResNet的图像编码器"""
@@ -28,7 +38,7 @@ class ResNetImageEncoder(nn.Module):
         self.batch_size = self.config.get('batch_size', 32)
         
         # 从系统配置中读取设备设置
-        system_config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'configs', 'system.json')
+        system_config_path = get_system_config_path()
         with open(system_config_path, 'r') as f:
             system_config = json.load(f)
             
@@ -74,11 +84,11 @@ class ResNetImageEncoder(nn.Module):
         else:
             raise ValueError(f"不支持的ResNet模型: {self.model_name}")
             
-    def _validate_image(self, image: Union[str, Image.Image]) -> Image.Image:
+    def _validate_image(self, image: Union[str, Image.Image, np.ndarray]) -> Image.Image:
         """验证输入图像
         
         Args:
-            image: 输入图像或图像路径
+            image: 输入图像、图像路径或numpy数组
             
         Returns:
             验证后的PIL图像
@@ -93,9 +103,25 @@ class ResNetImageEncoder(nn.Module):
                 image = Image.open(image)
             except Exception as e:
                 raise ValueError(f"无法打开图像文件: {str(e)}")
+        elif isinstance(image, np.ndarray):
+            # 处理numpy数组
+            if image.ndim == 3:
+                # 确保是RGB格式
+                if image.shape[2] == 3:
+                    image = Image.fromarray(image.astype(np.uint8))
+                elif image.shape[2] == 1:
+                    # 灰度图像转换为RGB
+                    image = Image.fromarray(image.squeeze().astype(np.uint8)).convert('RGB')
+                else:
+                    raise ValueError(f"不支持的图像通道数: {image.shape[2]}")
+            elif image.ndim == 2:
+                # 灰度图像
+                image = Image.fromarray(image.astype(np.uint8)).convert('RGB')
+            else:
+                raise ValueError(f"不支持的图像维度: {image.ndim}")
                 
         if not isinstance(image, Image.Image):
-            raise ValueError("输入必须是PIL图像或图像文件路径")
+            raise ValueError("输入必须是PIL图像、图像文件路径或numpy数组")
             
         if image.mode != 'RGB':
             image = image.convert('RGB')

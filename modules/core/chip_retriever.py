@@ -73,7 +73,22 @@ class ChipRetriever(BaseRetriever):
             self.config.get('modal', {})
         )
         
-        self.llm_manager = LLMManager(self.config['llm'])
+        # 获取LLM配置并添加调试日志
+        llm_config = {}
+        if isinstance(self.config.get('llm'), dict):
+            llm_config = self.config['llm'].get('models', {}).get('default', {})
+        else:
+            logger.warning(f"LLM配置格式错误，期望字典但得到: {type(self.config.get('llm'))}")
+            # 使用默认配置
+            llm_config = {
+                "name": "llama2:latest",
+                "base_url": "http://localhost:11434",
+                "temperature": 0.7,
+                "max_tokens": 1000
+            }
+        
+        logger.info(f"LLM配置: {llm_config}")
+        self.llm_manager = LLMManager(llm_config)
         
     def retrieve(self, query: Dict[str, Any], context: Optional[Dict] = None, knowledge_base: Optional[Dict] = None) -> List[Dict]:
         """优化的检索实现
@@ -87,12 +102,30 @@ class ChipRetriever(BaseRetriever):
             检索结果列表
         """
         try:
+            # 确保查询是字典格式
+            if isinstance(query, str):
+                query = {'text': query, 'type': 'text'}
+            elif not isinstance(query, dict):
+                logger.warning(f"查询格式错误，期望字典但得到: {type(query)}")
+                query = {'text': str(query), 'type': 'text'}
+            
             # 1. 检查缓存
             cache_key = self._generate_cache_key(query, context)
             if cache_key in self.cache['results']:
                 return self.cache['results'][cache_key]
             
-            # 2. 并行处理
+            # 2. 准备知识库数据
+            if knowledge_base is None:
+                # 如果没有传入知识库，尝试从配置中加载
+                try:
+                    from ..knowledge.knowledge_base import KnowledgeBase
+                    kb = KnowledgeBase(self.config.get('knowledge_base', {}))
+                    knowledge_base = kb
+                except Exception as e:
+                    logger.warning(f"无法加载知识库: {str(e)}")
+                    knowledge_base = None
+            
+            # 3. 并行处理
             with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
                 # 并行执行多粒度检索
                 granularity_future = executor.submit(
@@ -114,23 +147,24 @@ class ChipRetriever(BaseRetriever):
                 granularity_results = granularity_future.result()
                 modal_results = modal_future.result()
             
-            # 3. 批处理融合
+            # 4. 批处理融合
             results = self._batch_fuse_results(
                 granularity_results,
                 modal_results
             )
             
-            # 4. 结果增强
+            # 5. 结果增强
             enhanced_results = self._enhance_results(results, query)
             
-            # 5. 更新缓存
+            # 6. 更新缓存
             self.cache['results'][cache_key] = enhanced_results
             
-            # 6. 确保返回非空结果
+            # 7. 确保返回非空结果
             if not enhanced_results:
                 # 生成默认结果
                 default_result = {
                     'id': 'default',
+                    'content': '默认结果：未找到相关匹配',
                     'score': 0.0,
                     'features': [],
                     'metadata': {
@@ -147,11 +181,12 @@ class ChipRetriever(BaseRetriever):
             # 返回默认结果
             return [{
                 'id': 'default',
+                'content': '检索失败：系统错误',
                 'score': 0.0,
                 'features': [],
                 'metadata': {
-                    'type': 'default',
-                    'description': '默认结果'
+                    'type': 'error',
+                    'description': '检索失败'
                 }
             }]
         
@@ -192,7 +227,7 @@ class ChipRetriever(BaseRetriever):
         
     def _process_batch(self, batch: List[Dict]) -> List[Dict]:
         """处理单个批次"""
-        # 1. 标准化
+        # 1. 标准化 - 修复参数传递
         normalized = self._normalize_results(batch, [])
         
         # 2. 去重
@@ -201,13 +236,21 @@ class ChipRetriever(BaseRetriever):
         # 3. 排序
         sorted_results = self._sort_results(deduplicated)
         
-        # 4. 增强
-        return self._enhance_results(sorted_results)
+        # 4. 增强 - 传递空查询作为默认值
+        return self._enhance_results(sorted_results, {})
         
     def _generate_cache_key(self, query: Dict, context: Optional[Dict]) -> str:
         """生成缓存键"""
-        # 实现缓存键生成逻辑
-        pass
+        import hashlib
+        import json
+        
+        # 序列化查询和上下文
+        query_str = json.dumps(query, sort_keys=True, default=str)
+        context_str = json.dumps(context or {}, sort_keys=True, default=str)
+        
+        # 生成哈希
+        content = f"{query_str}:{context_str}"
+        return hashlib.md5(content.encode()).hexdigest()
         
     def compute_similarity(self, query: Dict[str, Any], item: Dict[str, Any]) -> float:
         """计算综合相似度
