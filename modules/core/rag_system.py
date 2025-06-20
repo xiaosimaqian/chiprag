@@ -49,7 +49,20 @@ class RAGSystem:
         """初始化系统组件"""
         try:
             # 初始化知识库
-            self.knowledge_base = KnowledgeBase(self.config.get('knowledge_base', {}))
+            kb_config = self.config.get('knowledge_base', {})
+            
+            # 确保知识库配置正确
+            if 'path' not in kb_config:
+                kb_config['path'] = 'data/knowledge_base'
+            if 'format' not in kb_config:
+                kb_config['format'] = 'pkl'
+            if 'layout_experience' not in kb_config:
+                kb_config['layout_experience'] = 'data/knowledge_base'
+                
+            self.knowledge_base = KnowledgeBase(kb_config)
+            
+            # 添加调试信息
+            logger.info(f"知识库初始化完成，包含 {len(self.knowledge_base.cases)} 个案例")
             
             # 初始化检索器
             self.retriever = ChipRetriever(self.config.get('retriever', {}))

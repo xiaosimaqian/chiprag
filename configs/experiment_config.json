@@ -15,7 +15,9 @@
         "ablation_study": true
     },
     "knowledge_base": {
-        "layout_experience": "output/knowledge_base/layout_experience",
+        "path": "data/knowledge_base",
+        "format": "pkl",
+        "layout_experience": "data/knowledge_base",
         "similarity_threshold": 0.5,
         "top_k": 5,
         "feature_weights": {
@@ -23,6 +25,19 @@
             "module": 0.3,
             "connection": 0.2,
             "constraint": 0.1
+        },
+        "hierarchy_config": {
+            "levels": [
+                {"name": "system", "threshold": 0.8},
+                {"name": "module", "threshold": 0.6},
+                {"name": "component", "threshold": 0.4}
+            ]
+        },
+        "llm_config": {
+            "base_url": "http://localhost:11434",
+            "model": "llama2",
+            "temperature": 0.7,
+            "max_tokens": 1000
         }
     },
     "llm": {

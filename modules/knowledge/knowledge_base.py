@@ -38,7 +38,7 @@ class KnowledgeBase:
             'connection': [],
             'constraint': []
         }
-        self.layout_experience_path = self.config.get('layout_experience_path', './layout_experience')
+        self.layout_experience_path = self.config.get('layout_experience', './layout_experience')
         self._init_components()
         self._init_knowledge_base()
         self.load()  # 在初始化时就加载数据
@@ -418,13 +418,13 @@ class KnowledgeBase:
             'features': features['constraint']
         })
         
-    def get_similar_cases(self, query: Dict[str, Any], top_k: int = 3, similarity_threshold: float = 0.5) -> List[Dict[str, Any]]:
+    def get_similar_cases(self, query: Dict[str, Any], top_k: int = 3, similarity_threshold: float = 0.1) -> List[Dict[str, Any]]:
         """获取相似案例
         
         Args:
             query: 查询信息
             top_k: 返回结果数量
-            similarity_threshold: 相似度阈值
+            similarity_threshold: 相似度阈值（降低默认阈值）
             
         Returns:
             List[Dict[str, Any]]: 相似案例列表
@@ -452,36 +452,57 @@ class KnowledgeBase:
                 logger.info("知识库中没有案例数据")
                 return []
                 
+            logger.info(f"开始计算相似度，共有 {len(cases)} 个案例")
+            
             # 计算相似度
             similarities = []
-            for case in cases:
-                # 计算特征相似度
-                feature_sim = self._compute_feature_similarity(query, case)
-                
-                # 计算层次结构相似度
-                hierarchy_sim = self._compute_hierarchy_similarity(query, case)
-                
-                # 计算约束相似度
-                constraint_sim = self._compute_constraint_similarity(query, case)
-                
-                # 加权融合
-                similarity = (
-                    0.4 * feature_sim +
-                    0.4 * hierarchy_sim +
-                    0.2 * constraint_sim
-                )
-                
-                if similarity >= similarity_threshold:
-                    similarities.append((case, similarity))
+            for i, case in enumerate(cases):
+                try:
+                    # 计算特征相似度
+                    feature_sim = self._compute_feature_similarity(query, case)
+                    
+                    # 计算层次结构相似度
+                    hierarchy_sim = self._compute_hierarchy_similarity(query, case)
+                    
+                    # 计算约束相似度
+                    constraint_sim = self._compute_constraint_similarity(query, case)
+                    
+                    # 加权融合
+                    similarity = (
+                        0.4 * feature_sim +
+                        0.4 * hierarchy_sim +
+                        0.2 * constraint_sim
+                    )
+                    
+                    # 如果所有相似度都为0，给一个基础分数
+                    if feature_sim == 0 and hierarchy_sim == 0 and constraint_sim == 0:
+                        similarity = 0.3  # 基础相似度
+                    
+                    if similarity >= similarity_threshold:
+                        similarities.append((case, similarity))
+                        
+                    # 调试信息
+                    if i < 3:  # 只显示前3个案例的相似度
+                        logger.info(f"案例 {i}: feature_sim={feature_sim:.3f}, hierarchy_sim={hierarchy_sim:.3f}, constraint_sim={constraint_sim:.3f}, total={similarity:.3f}")
+                        
+                except Exception as e:
+                    logger.warning(f"计算案例 {i} 相似度失败: {str(e)}")
+                    continue
                     
             # 按相似度排序
             similarities.sort(key=lambda x: x[1], reverse=True)
             
+            logger.info(f"找到 {len(similarities)} 个相似案例（阈值: {similarity_threshold}）")
+            
             # 返回top_k结果
-            return [case for case, _ in similarities[:top_k]]
+            result = [case for case, _ in similarities[:top_k]]
+            logger.info(f"返回 {len(result)} 个相似案例")
+            return result
             
         except Exception as e:
             logger.error(f"获取相似案例失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return []
             
     def _compute_feature_similarity(self, query: Dict[str, Any], case: Dict[str, Any]) -> float:
@@ -1118,20 +1139,37 @@ class KnowledgeBase:
             # 确保目录存在
             os.makedirs(path, exist_ok=True)
             
-            # 加载案例数据
+            # 加载案例数据 - 修复：直接加载cases.pkl
             cases_file = os.path.join(path, "cases.pkl")
             if os.path.exists(cases_file):
-                with open(cases_file, 'rb') as f:
-                    self.cases = pickle.load(f)
+                try:
+                    with open(cases_file, 'rb') as f:
+                        self.cases = pickle.load(f)
+                    logger.info(f"成功加载案例数据，包含 {len(self.cases)} 个案例")
+                except Exception as e:
+                    logger.error(f"加载案例数据失败: {str(e)}")
+                    self.cases = []
             else:
+                logger.warning(f"案例文件不存在: {cases_file}")
                 self.cases = []
                 
             # 加载知识图谱
             graph_file = os.path.join(path, "knowledge_graph.pkl")
             if os.path.exists(graph_file):
-                with open(graph_file, 'rb') as f:
-                    self.knowledge_graph = pickle.load(f)
+                try:
+                    with open(graph_file, 'rb') as f:
+                        self.knowledge_graph = pickle.load(f)
+                    logger.info("成功加载知识图谱")
+                except Exception as e:
+                    logger.error(f"加载知识图谱失败: {str(e)}")
+                    self.knowledge_graph = {
+                        'global': [],
+                        'module': [],
+                        'connection': [],
+                        'constraint': []
+                    }
             else:
+                logger.warning(f"知识图谱文件不存在: {graph_file}")
                 self.knowledge_graph = {
                     'global': [],
                     'module': [],
@@ -1139,7 +1177,7 @@ class KnowledgeBase:
                     'constraint': []
                 }
                 
-            logger.info(f"成功加载知识库数据，包含 {len(self.cases)} 个案例")
+            logger.info(f"知识库加载完成，包含 {len(self.cases)} 个案例")
             return self
             
         except Exception as e:
