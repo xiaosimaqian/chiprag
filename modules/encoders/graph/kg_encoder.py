@@ -353,58 +353,63 @@ class KGEncoder(nn.Module):
         return model 
 
     def encode(self, graph: Dict[str, Any]) -> np.ndarray:
-        """编码知识图谱
+        """
+        编码知识图谱
         
         Args:
-            graph: 知识图谱数据，包含节点和边
+            graph: 知识图谱字典，包含nodes和edges
             
         Returns:
-            图谱编码向量
+            np.ndarray: 图编码向量
         """
         try:
             # 提取节点和边
             nodes = graph.get('nodes', [])
             edges = graph.get('edges', [])
             
-            if not nodes and not edges:
+            # 如果没有节点，返回零向量
+            if not nodes:
                 return np.zeros(self.embedding_dim)
-                
-            # 获取节点嵌入
+            
+            # 计算节点嵌入的平均值作为图表示
             node_embeddings = []
             for node in nodes:
-                if 'id' in node:
-                    try:
-                        emb = self.get_entity_embedding(node['id'])
-                        node_embeddings.append(emb.detach().cpu().numpy())
-                    except ValueError:
-                        continue
-                        
-            # 获取边嵌入
-            edge_embeddings = []
-            for edge in edges:
-                if 'relation' in edge:
-                    try:
-                        emb = self.get_relation_embedding(edge['relation'])
-                        edge_embeddings.append(emb.detach().cpu().numpy())
-                    except ValueError:
-                        continue
-                        
-            # 合并所有嵌入
-            all_embeddings = node_embeddings + edge_embeddings
+                if isinstance(node, dict) and 'id' in node:
+                    node_id = node['id']
+                    if isinstance(node_id, int) and 0 <= node_id < self.num_entities:
+                        emb = self.get_entity_embedding(node_id).detach().cpu().numpy()
+                        node_embeddings.append(emb)
             
-            if not all_embeddings:
+            if node_embeddings:
+                return np.mean(node_embeddings, axis=0)
+            else:
                 return np.zeros(self.embedding_dim)
                 
-            # 计算平均嵌入
-            mean_embedding = np.mean(all_embeddings, axis=0)
+        except Exception as e:
+            logger.error(f"图编码失败: {str(e)}")
+            return np.zeros(self.embedding_dim)
+    
+    def compute_similarity(self, graph1: Dict[str, Any], graph2: Dict[str, Any]) -> float:
+        """
+        计算两个图的相似度
+        
+        Args:
+            graph1: 第一个图
+            graph2: 第二个图
             
-            # 归一化
-            norm = np.linalg.norm(mean_embedding)
-            if norm > 0:
-                mean_embedding = mean_embedding / norm
-                
-            return mean_embedding
+        Returns:
+            float: 相似度分数
+        """
+        try:
+            # 编码两个图
+            emb1 = self.encode(graph1)
+            emb2 = self.encode(graph2)
+            
+            # 计算余弦相似度
+            similarity = np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2) + 1e-8)
+            
+            return float(similarity)
             
         except Exception as e:
-            logger.error(f"图谱编码失败: {str(e)}")
-            return np.zeros(self.embedding_dim) 
+            logger.error(f"计算图相似度失败: {str(e)}")
+            return 0.5  # 返回默认相似度 

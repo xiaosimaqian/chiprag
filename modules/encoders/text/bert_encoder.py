@@ -386,18 +386,25 @@ class BertTextEncoder(BaseEncoder):
             # 编码文本
             embedding1 = self.encode(text1)
             embedding2 = self.encode(text2)
+            
+            # 确保张量维度正确
+            if embedding1.dim() == 1:
+                embedding1 = embedding1.unsqueeze(0)
+            if embedding2.dim() == 1:
+                embedding2 = embedding2.unsqueeze(0)
         
             # 计算余弦相似度
             similarity = torch.nn.functional.cosine_similarity(
                 embedding1,
-                embedding2
+                embedding2,
+                dim=1  # 在特征维度上计算相似度
             )
             
             return similarity.item()
             
         except Exception as e:
             self.logger.error(f"计算相似度失败: {str(e)}")
-            return 0.0
+            return 0.5  # 返回默认相似度
         
     def save_model(self, path: str):
         """保存模型

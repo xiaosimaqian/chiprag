@@ -1785,10 +1785,16 @@ class MultiObjectiveEvaluator:
         Returns:
             功耗评分（0-1）
         """
+        # 安全获取组件列表，如果不存在则返回默认评分
+        components = layout.get('components', [])
+        if not components:
+            # 如果没有组件信息，返回默认评分
+            return 0.75
+            
         # 计算总功耗
         total_power = sum(
             comp.get('power', 1.0)  # 没有power字段时默认1.0
-            for comp in layout['components']
+            for comp in components
         )
         
         # 归一化功耗

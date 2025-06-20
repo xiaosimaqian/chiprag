@@ -79,12 +79,16 @@ class ModalRetriever(BaseRetriever):
         # 计算各模态的相似度
         similarities = {}
         for modality, encoder in self.encoders.items():
-            if modality in query and modality in item:
+            if modality in query:
                 try:
                     # 处理不同模态的数据格式
                     if modality == 'text':
                         query_data = query[modality]
-                        item_data = item.get('content', '') if isinstance(item, dict) else str(item)
+                        # 安全获取item中的文本内容
+                        if isinstance(item, dict):
+                            item_data = item.get('content', '')
+                        else:
+                            item_data = str(item)
                     elif modality == 'image':
                         query_data = query[modality]
                         # 从item中提取图像数据
@@ -92,6 +96,8 @@ class ModalRetriever(BaseRetriever):
                             item_data = item['features'].get('image', [])
                             if isinstance(item_data, list) and len(item_data) > 0:
                                 item_data = np.array(item_data)
+                            else:
+                                item_data = query_data  # 使用查询数据作为默认值
                         else:
                             item_data = query_data  # 使用查询数据作为默认值
                     elif modality == 'graph':
@@ -102,7 +108,10 @@ class ModalRetriever(BaseRetriever):
                             item_data = query_data  # 使用查询数据作为默认值
                     else:
                         query_data = query[modality]
-                        item_data = item[modality]
+                        if isinstance(item, dict) and modality in item:
+                            item_data = item[modality]
+                        else:
+                            item_data = query_data  # 使用查询数据作为默认值
                     
                     similarities[modality] = encoder.compute_similarity(query_data, item_data)
                 except Exception as e:

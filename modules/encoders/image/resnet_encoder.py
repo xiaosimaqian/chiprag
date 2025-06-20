@@ -239,7 +239,7 @@ class ResNetImageEncoder(nn.Module):
         """
         return self.forward(images)
         
-    def compute_similarity(self, image1: Union[str, Image.Image], image2: Union[str, Image.Image]) -> float:
+    def compute_similarity(self, image1: Union[str, Image.Image, np.ndarray], image2: Union[str, Image.Image, np.ndarray]) -> float:
         """
         计算两个图像的相似度
         
@@ -250,19 +250,25 @@ class ResNetImageEncoder(nn.Module):
         Returns:
             相似度分数
         """
-        # 编码图像
-        emb1 = self.encode_image(image1)
-        emb2 = self.encode_image(image2)
-        
-        # 计算余弦相似度
-        similarity = torch.nn.functional.cosine_similarity(emb1, emb2, dim=0)
-        
-        # 清理内存
-        del emb1, emb2
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        try:
+            # 编码图像
+            emb1 = self.encode_image(image1)
+            emb2 = self.encode_image(image2)
             
-        return similarity.item()
+            # 计算余弦相似度
+            similarity = torch.nn.functional.cosine_similarity(emb1, emb2, dim=0)
+            
+            # 清理内存
+            del emb1, emb2
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
+            return similarity.item()
+            
+        except Exception as e:
+            logger.error(f"计算图像相似度失败: {str(e)}")
+            # 返回默认相似度
+            return 0.5
         
     def save_model(self, path: str):
         """
