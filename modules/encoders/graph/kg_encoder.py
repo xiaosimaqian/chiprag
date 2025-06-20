@@ -412,4 +412,4 @@ class KGEncoder(nn.Module):
             
         except Exception as e:
             logger.error(f"计算图相似度失败: {str(e)}")
-            return 0.5  # 返回默认相似度 
+            return 0.5  # 返回默认相似度

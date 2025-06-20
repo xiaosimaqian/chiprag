@@ -130,7 +130,7 @@ class ChipRetriever(BaseRetriever):
                 # 并行执行多粒度检索
                 granularity_future = executor.submit(
                     self.granularity_retriever.retrieve,
-                    query,  # 直接传递query字典
+                    query,
                     context,
                     knowledge_base
                 )
@@ -138,7 +138,7 @@ class ChipRetriever(BaseRetriever):
                 # 并行执行多模态检索
                 modal_future = executor.submit(
                     self.modal_retriever.retrieve,
-                    query,  # 直接传递query字典
+                    query,
                     context,
                     knowledge_base
                 )
